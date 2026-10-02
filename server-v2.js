@@ -115,7 +115,7 @@ const server = http.createServer((req,res) => {
     res.writeHead(200, {'content-type':'text/plain'});
     return res.end('ok');
   }
-  if (path === '/upstream-health') {
+  if (path === '/upstream-health' || path === '/upstream_health') {
     return probeUpstream(res);
   }
   if (path === '/login' && req.method === 'GET') {
