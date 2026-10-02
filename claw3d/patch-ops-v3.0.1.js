@@ -8,12 +8,23 @@ function replaceOnce(file, from, to, label) {
 }
 
 const retro = 'src/features/retro-office/RetroOffice3D.tsx';
-replaceOnce(
-  retro,
-  'import { Component } from "react";\n',
-  '',
-  'dedupe existing Component import',
-);
+{
+  let text = fs.readFileSync(retro, 'utf8');
+  const patterns = [
+    'import { Component, type ReactNode } from "react";\n',
+    'import { Component, ReactNode } from "react";\n',
+    'import { Component } from "react";\n',
+  ];
+  const found = patterns.find((pattern) => text.includes(pattern));
+  if (found) {
+    text = text.replace(found, '');
+    fs.writeFileSync(retro, text, 'utf8');
+  } else {
+    const componentImports = (text.match(/\bComponent\b/g) || []).length;
+    if (componentImports < 1) throw new Error('SOFIA v3.0.1: Component import unavailable after v3.0');
+    console.log('SOFIA v3.0.1: no standalone Component import to remove');
+  }
+}
 
 const hud = 'src/features/sofia-ops/SofiaOpsHud.tsx';
 replaceOnce(hud, '    const report = (kind, value) => {', '    const report = (kind: string, value: unknown) => {', 'type client error reporter');
