@@ -22,21 +22,16 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 
 COPY claw3d /opt/sofia-patches
 
-# Railway exposes service variables to the build when declared as ARG.
-# Gateway URL/state dir seed the Studio settings (desk assignments, titles);
-# the three SOFIA_*_JS values are the legacy variable-stored patches, applied
-# in their historical position when present.
 ARG OPENCLAW_STATE_DIR
 ARG CLAW3D_GATEWAY_URL
 ARG SOFIA_STORAGE_FIX_JS
 ARG SOFIA_SETTINGS_FIX_JS
 ARG SOFIA_HEALTH_PATCH_JS
-ARG SOFIA_CHAIN_STAGE=v2.8
+ARG SOFIA_CHAIN_STAGE=v2.9
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN sh /opt/sofia-patches/apply-chain.sh /opt/sofia-patches "${SOFIA_CHAIN_STAGE}"
 
-# next/font fetches Google Fonts during the build; retry transient failures.
 RUN for attempt in 1 2 3; do \
       NODE_ENV=production npx next build --webpack && exit 0; \
       echo "next build failed (attempt ${attempt}), retrying"; rm -rf .next; sleep 10; \

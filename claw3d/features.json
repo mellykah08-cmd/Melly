@@ -152,16 +152,14 @@
    "stage": 3,
    "title": "Staging sofia-claw3d-next + login sofia-claw3d-next-login atualizados a cada slice",
    "test": "deploy SUCCESS + e2e remoto",
-   "passes": true,
-   "evidence": "sofia-claw3d-next deploy ac3216de SUCCESS (commit 0e53008, chain v2.8 aplicada no Railway com os patches legados); healthz 200; office/harness/ingress exigem auth (401); canário /canary/on no login de produção"
+   "passes": false
   },
   {
    "id": "S3.promotion",
    "stage": 3,
    "title": "Promoção para produção (login -> building) com rollback live confirmado",
    "test": "deploy SUCCESS + e2e produção",
-   "passes": true,
-   "evidence": "sofia-claw3d-building deploy 8cbb9810 SUCCESS (commit 0e53008, SOFIA_CHAIN_OK v2.8); login /upstream_health 24/24 x 200 durante a troca; rollback: building 6fdbd3b3 (v2.6) redeployável + sofia-claw3d-live 26151804"
+   "passes": false
   }
  ]
 }
