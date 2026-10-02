@@ -262,7 +262,9 @@ export const clearSofiaOpsEvents = () => {
 };
 export const subscribeSofiaOpsEvents = (listener: () => void) => {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 };
 `);
 
