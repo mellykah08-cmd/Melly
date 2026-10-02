@@ -337,7 +337,7 @@ index e212097..b1e7b17 100644
            onStandupArrivalsChange={(arrivedAgentIds) => {
              void standupController.reportArrivals(arrivedAgentIds);
 diff --git a/src/features/retro-office/RetroOffice3D.tsx b/src/features/retro-office/RetroOffice3D.tsx
-index 11ac130..a0f4f9d 100644
+index 11ac130..107cb4e 100644
 --- a/src/features/retro-office/RetroOffice3D.tsx
 +++ b/src/features/retro-office/RetroOffice3D.tsx
 @@ -226,6 +226,15 @@ import {
@@ -398,7 +398,7 @@ index 11ac130..a0f4f9d 100644
                explicitDeskHold ||
                explicitGymHold ||
                explicitSmsBoothHold ||
-@@ -1116,8 +1135,46 @@ function useAgentTick(
+@@ -1116,8 +1135,56 @@ function useAgentTick(
  
        let ns: Partial<RenderAgent> = {};
        if (existing) {
@@ -434,9 +434,19 @@ index 11ac130..a0f4f9d 100644
 +          ns.targetY = sofiaTarget.y;
 +          if (targetChanged) {
 +            ns.path = planPath(existing.x, existing.y, sofiaTarget.x, sofiaTarget.y);
++            // Trapped in a sealed pocket (e.g. spawned inside a closed room): no
++            // route exists, so the agent reappears at its destination instead of
++            // freezing where it is.
++            if (
++              ns.path.length === 0 &&
++              Math.hypot(existing.x - sofiaTarget.x, existing.y - sofiaTarget.y) > 30
++            ) {
++              ns.x = sofiaTarget.x;
++              ns.y = sofiaTarget.y;
++            }
 +          }
 +          const arrived =
-+            Math.hypot(existing.x - sofiaTarget.x, existing.y - sofiaTarget.y) < 15;
++            Math.hypot((ns.x ?? existing.x) - sofiaTarget.x, (ns.y ?? existing.y) - sofiaTarget.y) < 15;
 +          ns.state = arrived
 +            ? sofiaTarget.pose === "sit"
 +              ? "sitting"
@@ -447,7 +457,7 @@ index 11ac130..a0f4f9d 100644
            ns.pingPongUntil = undefined;
            ns.pingPongTargetX = undefined;
            ns.pingPongTargetY = undefined;
-@@ -1457,7 +1514,9 @@ function useAgentTick(
+@@ -1457,7 +1524,9 @@ function useAgentTick(
            ns.path = [];
            ns.state = "standing";
          }
@@ -458,7 +468,7 @@ index 11ac130..a0f4f9d 100644
            if (effectiveStatus === "working") {
              const serverRoomRoute = resolveServerRoomRoute(
                existing.x,
-@@ -1625,8 +1684,9 @@ function useAgentTick(
+@@ -1625,8 +1694,9 @@ function useAgentTick(
          const phoneBoothRoute = resolvePhoneBoothRoute(phoneBoothItem, sx, sy);
          const gymRoute = resolveGymRoute(sx, sy, gymWorkoutPos);
          const qaLabRoute = resolveQaLabRoute(sx, sy, qaStationPos);
@@ -470,7 +480,7 @@ index 11ac130..a0f4f9d 100644
              ? explicitMeetingHold && meetingTarget
                ? {
                    x: meetingTarget.x,
-@@ -1735,6 +1795,19 @@ function useAgentTick(
+@@ -1735,6 +1805,19 @@ function useAgentTick(
                ? meetingTarget.facing
                : Math.PI / 2,
          };
@@ -490,7 +500,7 @@ index 11ac130..a0f4f9d 100644
        }
        next.push({ ...agent, ...ns, status: effectiveStatus } as RenderAgent);
      });
-@@ -1763,6 +1836,8 @@ function useAgentTick(
+@@ -1763,6 +1846,8 @@ function useAgentTick(
      pickSpawnPoint,
      planPath,
      resolveMeetingTarget,
@@ -499,7 +509,7 @@ index 11ac130..a0f4f9d 100644
      standupActive,
      standupMeeting,
    ]);
-@@ -2057,8 +2132,11 @@ function useAgentTick(
+@@ -2057,8 +2142,11 @@ function useAgentTick(
                  frame: agent.frame + 1,
                };
              }
@@ -513,7 +523,7 @@ index 11ac130..a0f4f9d 100644
                  ? "standing"
                  : agent.interactionTarget === "phone_booth"
                    ? "standing"
-@@ -2069,7 +2147,9 @@ function useAgentTick(
+@@ -2069,7 +2157,9 @@ function useAgentTick(
                        : agent.interactionTarget === "qa_lab"
                          ? "standing"
                          : "sitting";
@@ -524,7 +534,7 @@ index 11ac130..a0f4f9d 100644
                nf = agent.facing;
              } else if (agent.interactionTarget === "phone_booth") {
                nf = agent.facing;
-@@ -2261,41 +2341,6 @@ const buildInitialFurnitureLayout = (
+@@ -2261,41 +2351,6 @@ const buildInitialFurnitureLayout = (
      ),
    );
  
@@ -566,7 +576,7 @@ index 11ac130..a0f4f9d 100644
  class SofiaSceneErrorBoundary extends Component<{ label: string; children?: ReactNode }, { failed: boolean }> {
    state = { failed: false };
    static getDerivedStateFromError() {
-@@ -2309,99 +2354,6 @@ class SofiaSceneErrorBoundary extends Component<{ label: string; children?: Reac
+@@ -2309,99 +2364,6 @@ class SofiaSceneErrorBoundary extends Component<{ label: string; children?: Reac
    }
  }
  
@@ -666,7 +676,7 @@ index 11ac130..a0f4f9d 100644
  export function RetroOffice3D({
    agents,
    officeCenterSignal = 0,
-@@ -2804,22 +2756,6 @@ export function RetroOffice3D({
+@@ -2804,22 +2766,6 @@ export function RetroOffice3D({
    // New Idea 7: heatmap mode.
    const [heatmapMode, setHeatmapMode] = useState(false);
    const [trailMode, setTrailMode] = useState(false);
@@ -689,7 +699,7 @@ index 11ac130..a0f4f9d 100644
    const heatGridRef = useRef<Uint16Array | null>(null);
    // E3 Idea 1: mood emoji reactions above agent chips.
    const [moodByAgentId, setMoodByAgentId] = useState<
-@@ -2959,6 +2895,40 @@ export function RetroOffice3D({
+@@ -2959,6 +2905,40 @@ export function RetroOffice3D({
      () => getMeetingSeatLocations(furniture),
      [furniture],
    );
@@ -730,7 +740,7 @@ index 11ac130..a0f4f9d 100644
  
    // Keep a stable ref to furniture so the tick callback can read it without
    // being recreated every time furniture changes.
-@@ -3033,6 +3003,8 @@ export function RetroOffice3D({
+@@ -3033,6 +3013,8 @@ export function RetroOffice3D({
      resolvedQaHoldByAgentId,
      resolvedGithubReviewByAgentId,
      standupMeeting,
@@ -739,7 +749,7 @@ index 11ac130..a0f4f9d 100644
    );
    useEffect(() => {
      const syncRenderAgentUi = () => {
-@@ -3098,6 +3070,7 @@ export function RetroOffice3D({
+@@ -3098,6 +3080,7 @@ export function RetroOffice3D({
        const [wx, , wz] = toWorld(agent.x, agent.y);
        orbitRef.current.target.set(wx, 0, wz);
        orbitRef.current.update();
@@ -747,7 +757,7 @@ index 11ac130..a0f4f9d 100644
        onAgentChatSelect?.(agentId);
      },
      [onAgentChatSelect, renderAgentLookupRef],
-@@ -5442,11 +5415,14 @@ export function RetroOffice3D({
+@@ -5442,11 +5425,14 @@ export function RetroOffice3D({
                agentLookupRef={renderAgentLookupRef}
              />
  
