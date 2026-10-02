@@ -6,7 +6,7 @@
 FROM node:22-bookworm-slim
 
 RUN apt-get update \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl patch \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/claw3d
@@ -31,7 +31,7 @@ ARG CLAW3D_GATEWAY_URL
 ARG SOFIA_STORAGE_FIX_JS
 ARG SOFIA_SETTINGS_FIX_JS
 ARG SOFIA_HEALTH_PATCH_JS
-ARG SOFIA_CHAIN_STAGE=v2.7
+ARG SOFIA_CHAIN_STAGE=v2.8
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN sh /opt/sofia-patches/apply-chain.sh /opt/sofia-patches "${SOFIA_CHAIN_STAGE}"

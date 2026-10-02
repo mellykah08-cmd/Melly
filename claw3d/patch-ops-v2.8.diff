@@ -1,0 +1,3906 @@
+diff --git a/src/app/api/sofia-ops/events/route.ts b/src/app/api/sofia-ops/events/route.ts
+index 03f54a1..027add9 100644
+--- a/src/app/api/sofia-ops/events/route.ts
++++ b/src/app/api/sofia-ops/events/route.ts
+@@ -1,12 +1,15 @@
+ import { timingSafeEqual } from "node:crypto";
+ import { NextRequest, NextResponse } from "next/server";
+-import { listSofiaOpsServerEvents, pushSofiaOpsServerEvent } from "@/lib/sofia-ops/serverEventStore";
++import { headSofiaOpsServerSeq, listSofiaOpsServerEventsAfter, pushSofiaOpsServerEvent } from "@/lib/sofia-ops/serverEventStore";
+ 
+ export const runtime = "nodejs";
+ export const dynamic = "force-dynamic";
+ 
+-export async function GET() {
+-  return NextResponse.json({ events: listSofiaOpsServerEvents() }, { headers: { "Cache-Control": "no-store" } });
++// ?after=<seq> returns only newer events so mobile polling stays tiny.
++export async function GET(request: NextRequest) {
++  const after = Number(request.nextUrl.searchParams.get("after") ?? "0");
++  const events = listSofiaOpsServerEventsAfter(Number.isFinite(after) ? after : 0);
++  return NextResponse.json({ head: headSofiaOpsServerSeq(), events }, { headers: { "Cache-Control": "no-store" } });
+ }
+ 
+ export async function POST(request: NextRequest) {
+diff --git a/src/app/api/sofia-ops/harness/route.ts b/src/app/api/sofia-ops/harness/route.ts
+new file mode 100644
+index 0000000..28fcccd
+--- /dev/null
++++ b/src/app/api/sofia-ops/harness/route.ts
+@@ -0,0 +1,108 @@
++import { NextRequest, NextResponse } from "next/server";
++import {
++  clearSyntheticSofiaOpsServerEvents,
++  listSofiaOpsServerEvents,
++  pushSofiaOpsServerEvent,
++} from "@/lib/sofia-ops/serverEventStore";
++
++export const runtime = "nodejs";
++export const dynamic = "force-dynamic";
++
++// Event Harness: synthetic events enter the SAME Event Fabric as real ingress
++// (pushSofiaOpsServerEvent), flagged synthetic so the UI never reports them as
++// real integrations. Protected by the Studio access gate (cookie) plus a custom
++// header (forces a CORS preflight, so other sites cannot fire it). Nothing here
++// talks to WhatsApp, n8n or Railway. Disable with SOFIA_OPS_HARNESS=0.
++
++type Template = { type: string; source: string; severity: "info" | "success" | "warning" | "critical"; summary: string; correlationId?: string; payload?: unknown };
++
++const TEMPLATES: Record<string, (ctx: { project: string | null; correlationId: string; incidentSource: string }) => Template> = {
++  "deploy.started": () => ({ type: "railway.deploy.started", source: "railway", severity: "info", summary: "Deploy iniciado no Railway" }),
++  "deploy.success": () => ({ type: "railway.deploy.success", source: "railway", severity: "success", summary: "Deploy concluído com sucesso" }),
++  "deploy.failed": () => ({ type: "railway.deploy.failed", source: "railway", severity: "critical", summary: "Deploy falhou: healthcheck sem resposta", payload: { service: "sofia-api", exitCode: 1, healthcheck: "/healthz timeout" } }),
++  "n8n.failed": () => ({ type: "n8n.workflow.failed", source: "n8n", severity: "warning", summary: "Workflow n8n falhou no nó HTTP Request", payload: { workflow: "sofia-agenda", node: "HTTP Request", error: "502" } }),
++  "audit.started": () => ({ type: "audit.started", source: "n8n", severity: "info", summary: "Auditoria de fluxo iniciada" }),
++  "shadow.candidate": (ctx) => ({ type: "shadow.candidate", source: "openclaw", severity: "info", summary: "Sofia gerou resposta candidata (não enviada)", correlationId: ctx.correlationId }),
++  "shadow.human": (ctx) => ({ type: "shadow.human", source: "whatsapp", severity: "info", summary: "Resposta humana registrada para comparação", correlationId: ctx.correlationId }),
++  "shadow.compare": (ctx) => ({ type: "shadow.compare", source: "openclaw", severity: "info", summary: "Comparação: 82% equivalente", correlationId: ctx.correlationId, payload: { score: 0.82, match: true } }),
++  incident: () => ({ type: "incident.opened", source: "system", severity: "critical", summary: "Incidente crítico: latência alta no atendimento" }),
++  recovery: (ctx) => ({ type: "incident.resolved", source: ctx.incidentSource, severity: "success", summary: "Serviço recuperado, métricas normalizadas" }),
++};
++
++const SCENARIO: { at: number; kind: string }[] = [
++  { at: 0, kind: "deploy.started" },
++  { at: 9000, kind: "audit.started" },
++  { at: 18000, kind: "shadow.candidate" },
++  { at: 23000, kind: "shadow.human" },
++  { at: 28000, kind: "shadow.compare" },
++  { at: 38000, kind: "deploy.failed" },
++  { at: 70000, kind: "recovery" },
++];
++
++type HarnessState = { timers: ReturnType<typeof setTimeout>[]; runningUntil: number; shadow?: { id: string; ts: number } };
++const root = globalThis as typeof globalThis & { __sofiaOpsHarness?: HarnessState };
++const harness: HarnessState = root.__sofiaOpsHarness ?? { timers: [], runningUntil: 0 };
++root.__sofiaOpsHarness = harness;
++
++const latestIncidentSource = () =>
++  listSofiaOpsServerEvents().find((event) => event.severity === "critical")?.source ?? "system";
++
++const fire = (kind: string, project: string | null, correlationId: string) => {
++  const template = TEMPLATES[kind];
++  if (!template) return null;
++  const event = template({ project, correlationId, incidentSource: latestIncidentSource() });
++  return pushSofiaOpsServerEvent({ ...event, summary: "[SIM] " + event.summary, project: project ?? undefined }, { synthetic: true });
++};
++
++const cancelScenario = () => {
++  for (const timer of harness.timers) clearTimeout(timer);
++  harness.timers = [];
++  harness.runningUntil = 0;
++};
++
++export async function GET() {
++  if (process.env.SOFIA_OPS_HARNESS === "0") return NextResponse.json({ enabled: false }, { status: 404 });
++  return NextResponse.json(
++    { enabled: true, kinds: Object.keys(TEMPLATES), scenario: SCENARIO, running: harness.runningUntil > Date.now(), runningUntil: harness.runningUntil },
++    { headers: { "Cache-Control": "no-store" } },
++  );
++}
++
++export async function POST(request: NextRequest) {
++  if (process.env.SOFIA_OPS_HARNESS === "0") return NextResponse.json({ error: "harness_disabled" }, { status: 404 });
++  if (request.headers.get("x-sofia-harness") !== "1") return NextResponse.json({ error: "missing_header" }, { status: 400 });
++  let body: { kind?: unknown; scenario?: unknown; project?: unknown } = {};
++  try {
++    const raw = await request.text();
++    if (raw.length > 4000) return NextResponse.json({ error: "payload_too_large" }, { status: 413 });
++    body = raw ? JSON.parse(raw) : {};
++  } catch {
++    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
++  }
++  const project = typeof body.project === "string" && body.project.trim() ? body.project.trim().slice(0, 40) : null;
++  // Single shadow.* fires within 3 minutes share one correlation, so candidate,
++  // human and compare land on the same Shadow Twin pair.
++  if (!harness.shadow || Date.now() - harness.shadow.ts > 180000) harness.shadow = { id: "sim-" + Date.now().toString(36), ts: Date.now() };
++  harness.shadow.ts = Date.now();
++  const correlationId = harness.shadow.id;
++
++  if (body.scenario === "reset") {
++    cancelScenario();
++    return NextResponse.json({ ok: true, removed: clearSyntheticSofiaOpsServerEvents() });
++  }
++  if (body.scenario === "full") {
++    cancelScenario();
++    const total = SCENARIO[SCENARIO.length - 1].at;
++    harness.runningUntil = Date.now() + total;
++    for (const step of SCENARIO) {
++      const timer = setTimeout(() => fire(step.kind, project, correlationId), step.at);
++      if (typeof timer === "object" && timer && "unref" in timer) (timer as { unref: () => void }).unref();
++      harness.timers.push(timer);
++    }
++    return NextResponse.json({ ok: true, scenario: "full", steps: SCENARIO.length, durationMs: total }, { status: 202 });
++  }
++  const kind = typeof body.kind === "string" ? body.kind : "";
++  const event = fire(kind, project, correlationId);
++  if (!event) return NextResponse.json({ error: "unknown_kind", kinds: Object.keys(TEMPLATES) }, { status: 400 });
++  return NextResponse.json({ ok: true, event }, { status: 202 });
++}
+diff --git a/src/app/api/sofia-ops/snapshot/route.ts b/src/app/api/sofia-ops/snapshot/route.ts
+index 29729c5..c0879f3 100644
+--- a/src/app/api/sofia-ops/snapshot/route.ts
++++ b/src/app/api/sofia-ops/snapshot/route.ts
+@@ -1,11 +1,27 @@
+ import { NextResponse } from "next/server";
+ import { listSofiaOpsServerEvents } from "@/lib/sofia-ops/serverEventStore";
+-import { deriveTwinSnapshot } from "@/lib/sofia-ops/twinEngine";
++import { reduceWorld } from "@/lib/sofia-ops/worldState";
+ 
+ export const runtime = "nodejs";
+ export const dynamic = "force-dynamic";
+ 
++// Server-side view of the World State built from the external Event Fabric only
++// (agents live in the browser's gateway session). Useful for health checks and
++// observability without opening the 3D office.
+ export async function GET() {
+   const events = listSofiaOpsServerEvents();
+-  return NextResponse.json({ snapshot: deriveTwinSnapshot(events), events: events.slice(0, 40) }, { headers: { "Cache-Control": "no-store" } });
++  const world = reduceWorld(events, [], Date.now());
++  return NextResponse.json(
++    {
++      mode: world.mode,
++      incident: world.incident,
++      shadow: world.shadow,
++      zones: world.zones,
++      projects: world.projects,
++      floorActivity: world.floorActivity,
++      eventCount: events.length,
++      events: events.slice(0, 40),
++    },
++    { headers: { "Cache-Control": "no-store" } },
++  );
+ }
+diff --git a/src/features/office/components/OfficeFloorNav.tsx b/src/features/office/components/OfficeFloorNav.tsx
+index 2443fd3..4749374 100644
+--- a/src/features/office/components/OfficeFloorNav.tsx
++++ b/src/features/office/components/OfficeFloorNav.tsx
+@@ -117,7 +117,9 @@ export function OfficeFloorNav({
+     if (typeof window === "undefined") return;
+     try {
+       const stored = window.localStorage.getItem(DIRECTORY_COLLAPSED_STORAGE_KEY);
+-      if (stored === "true") setDirectoryCollapsed(true);
++      // Phones: start collapsed (the directory would cover most of the office);
++      // an explicit user choice always wins.
++      if (stored === "true" || (stored === null && window.innerWidth < 768)) setDirectoryCollapsed(true);
+     } catch {
+       // localStorage may be unavailable (private mode, SSR, etc.); ignore.
+     }
+diff --git a/src/features/office/screens/OfficeScreen.tsx b/src/features/office/screens/OfficeScreen.tsx
+index e212097..b1e7b17 100644
+--- a/src/features/office/screens/OfficeScreen.tsx
++++ b/src/features/office/screens/OfficeScreen.tsx
+@@ -12,9 +12,7 @@ import { useRouter } from "next/navigation";
+ import { MessageSquare, ChevronDown, ChevronLeft, ChevronRight, Mic } from "lucide-react";
+ import { RetroOffice3D } from "@/features/retro-office/RetroOffice3D";
+ import { SofiaOpsHud } from "@/features/sofia-ops/SofiaOpsHud";
+-import { directAgents, directiveSignature, type SofiaDirective } from "@/lib/sofia-ops/worldDirector";
+-import type { TwinEvent } from "@/lib/sofia-ops/twinEngine";
+-import type { StandupMeeting } from "@/lib/office/standup/types";
++import { sofiaWorld } from "@/lib/sofia-ops/worldStore";
+ import { ingestSofiaOpsRuntimeEvent } from "@/lib/sofia-ops/eventBus";
+ import type { OfficeAgent } from "@/features/retro-office/core/types";
+ import { RunningAvatarLoader } from "@/features/agents/components/RunningAvatarLoader";
+@@ -970,7 +968,6 @@ export function OfficeScreen({
+   const [settingsCoordinator] = useState(() =>
+     createStudioSettingsCoordinator(),
+   );
+-  const [sofiaDirective, setSofiaDirective] = useState<SofiaDirective>(() => directAgents([], []));
+   const {
+     client,
+     provider,
+@@ -3199,9 +3196,6 @@ export function OfficeScreen({
+     const skillTriggerHoldMaps = buildOfficeSkillTriggerHoldMaps(
+       skillTriggers.movementTargetByAgentId,
+     );
+-    // Sofia World Director holds win over idle wandering, never over explicit user actions above.
+-    Object.assign(skillTriggerHoldMaps.deskHoldByAgentId, sofiaDirective.deskHoldByAgentId);
+-    Object.assign(skillTriggerHoldMaps.qaHoldByAgentId, sofiaDirective.qaHoldByAgentId);
+ 
+     return {
+       ...base,
+@@ -3237,7 +3231,6 @@ export function OfficeScreen({
+     marketplaceGymHoldByAgentId,
+     officeTriggerState,
+     skillTriggers.movementTargetByAgentId,
+-    sofiaDirective,
+     state.agents,
+   ]);
+   const {
+@@ -4388,44 +4381,33 @@ export function OfficeScreen({
+   const focusedRemoteChatState = focusedRemoteChatTarget
+     ? (remoteChatByAgentId[focusedRemoteChatTarget.id] ?? EMPTY_REMOTE_CHAT_SESSION)
+     : null;
+-  const sofiaAgentIdsKey = state.agents.map((agent) => agent.agentId).join("|");
++  // Sofia Spatial OS: OpenClaw stays the source of truth for agents/runs; the
++  // world store only reads them (ids, names, live status, active run).
++  const sofiaAgentKey = state.agents
++    .map((agent) => agent.agentId + ":" + agent.status + ":" + (agent.runId ?? "") + ":" + agent.name)
++    .join("|");
+   useEffect(() => {
+-    let lastSignature = "";
+-    const run = () => {
+-      const events = ((window as Window & { __SOFIA_OPS_EVENTS?: TwinEvent[] }).__SOFIA_OPS_EVENTS ?? []);
+-      const next = directAgents(events, sofiaAgentIdsKey ? sofiaAgentIdsKey.split("|") : []);
+-      const signature = directiveSignature(next);
+-      if (signature === lastSignature) return;
+-      lastSignature = signature;
+-      setSofiaDirective(next);
+-      window.dispatchEvent(new CustomEvent("sofia-ops:war-room", { detail: next.warRoom }));
+-      (window as Window & { __SOFIA_OPS_DIRECTIVE?: SofiaDirective }).__SOFIA_OPS_DIRECTIVE = next;
+-    };
+-    run();
+-    window.addEventListener("sofia-ops:events", run);
+-    const timer = window.setInterval(run, 10000);
+-    return () => { window.removeEventListener("sofia-ops:events", run); window.clearInterval(timer); };
+-  }, [sofiaAgentIdsKey]);
+-  const sofiaWarRoomMeeting = useMemo<StandupMeeting | null>(() => {
+-    const room = sofiaDirective.warRoom;
+-    if (!room || room.responsibleAgentIds.length === 0) return null;
+-    const opened = new Date(room.openedAt).toISOString();
+-    return {
+-      id: "sofia-war-room-" + room.incidentId,
+-      trigger: "manual",
+-      phase: room.state === "convocando" ? "gathering" : "in_progress",
+-      scheduledFor: null,
+-      startedAt: opened,
+-      updatedAt: opened,
+-      completedAt: null,
+-      currentSpeakerAgentId: room.responsibleAgentIds[0] ?? null,
+-      speakerStartedAt: opened,
+-      speakerDurationMs: 30000,
+-      participantOrder: room.responsibleAgentIds,
+-      arrivedAgentIds: [],
+-      cards: [],
+-    } as StandupMeeting;
+-  }, [sofiaDirective.warRoom]);
++    sofiaWorld.setAgents(
++      state.agents.map((agent) => ({
++        id: agent.agentId,
++        name: agent.name,
++        status: agent.status,
++        sessionKey: agent.sessionKey,
++        runId: agent.runId,
++        lastActivityAt: agent.lastActivityAt,
++      })),
++    );
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [sofiaAgentKey]);
++  const sofiaWasConnectedRef = useRef(false);
++  useEffect(() => {
++    if (status === "connected") {
++      sofiaWasConnectedRef.current = true;
++      sofiaWorld.setGateway("connected");
++      return;
++    }
++    sofiaWorld.setGateway(sofiaWasConnectedRef.current ? "reconnecting" : status === "connecting" ? "connecting" : "disconnected");
++  }, [status]);
+   const allVisibleAgents = useMemo(
+     () => [...officeAgents, ...remoteOfficeAgents],
+     [officeAgents, remoteOfficeAgents],
+@@ -4806,7 +4788,13 @@ export function OfficeScreen({
+         activeAdapterType={(selectedAdapterType as FloorProvider) ?? null}
+       />
+       <section className="relative h-full min-h-0 min-w-0 overflow-hidden">
+-        <SofiaOpsHud floorLabel={activeFloor.shortLabel} />
++        <SofiaOpsHud
++          floorId={activeFloor.id}
++          floorLabel={activeFloor.shortLabel}
++          onSelectFloor={(floorId) => {
++            void handleSelectFloor(floorId as FloorId);
++          }}
++        />
+         <RetroOffice3D
+           key={activeFloor.id}
+           agents={allVisibleAgents}
+@@ -4880,7 +4868,7 @@ export function OfficeScreen({
+           runCountByAgentId={runCountByAgentId}
+           lastSeenByAgentId={lastSeenByAgentId}
+           streamingTextByAgentId={streamingTextByAgentId}
+-          standupMeeting={sofiaWarRoomMeeting ?? standupController.meeting}
++          standupMeeting={standupController.meeting}
+           standupAutoOpenBoard={standupController.openBoardByDefault}
+           onStandupArrivalsChange={(arrivedAgentIds) => {
+             void standupController.reportArrivals(arrivedAgentIds);
+diff --git a/src/features/retro-office/RetroOffice3D.tsx b/src/features/retro-office/RetroOffice3D.tsx
+index 11ac130..15511eb 100644
+--- a/src/features/retro-office/RetroOffice3D.tsx
++++ b/src/features/retro-office/RetroOffice3D.tsx
+@@ -226,6 +226,15 @@ import {
+   TrailSystem as AgentTrailSystem,
+ } from "@/features/retro-office/systems/visualSystems";
+ import type { OfficeCleaningCue } from "@/lib/office/janitorReset";
++import {
++  PRESET_FLOOR,
++  resolveSofiaTargets,
++  resolveSpatialLayout,
++  SofiaSpatialLayer,
++  type SofiaTarget,
++  type SofiaTargetSet,
++} from "@/features/sofia-ops/SofiaSpatialLayer";
++import { sofiaWorld, useSofiaWorld } from "@/lib/sofia-ops/worldStore";
+ 
+ type OfficeDeskMonitorMap = Record<string, OfficeDeskMonitor>;
+ type RenderAgentUiSnapshot = Pick<RenderAgent, "state" | "status">;
+@@ -239,6 +248,9 @@ type FeedEvent = {
+ 
+ const EMPTY_STRING_RECORD: Record<string, string> = {};
+ const EMPTY_BOOLEAN_RECORD: Record<string, boolean> = {};
++const EMPTY_SOFIA_TARGETS: Record<string, SofiaTarget> = {};
++const EMPTY_SOFIA_SEATS: { x: number; y: number; facing: number }[] = [];
++const EMPTY_SOFIA_TARGET_SET: SofiaTargetSet = { targets: EMPTY_SOFIA_TARGETS, deskHolds: EMPTY_BOOLEAN_RECORD };
+ const EMPTY_NUMBER_RECORD: Record<string, number> = {};
+ const EMPTY_MONITOR_MAP: OfficeDeskMonitorMap = {};
+ const EMPTY_CLEANING_CUES: OfficeCleaningCue[] = [];
+@@ -890,6 +902,8 @@ function useAgentTick(
+   qaHoldByAgentId: Record<string, boolean> = {},
+   githubReviewByAgentId: Record<string, boolean> = {},
+   standupMeeting: StandupMeeting | null = null,
++  sofiaTargetByAgentId: Record<string, SofiaTarget> = EMPTY_SOFIA_TARGETS,
++  sofiaDeskHoldByAgentId: Record<string, boolean> = EMPTY_BOOLEAN_RECORD,
+ ) {
+   const renderAgentsRef = useRef<RenderAgent[]>([]);
+   const renderAgentLookupRef = useRef<Map<string, RenderAgent>>(new Map());
+@@ -1035,7 +1049,11 @@ function useAgentTick(
+         );
+         nextQaRef.current += 1;
+       }
+-      const explicitDeskHold = Boolean(deskHoldByAgentId[agent.id]);
++      // Sofia World Director: a station/seat target derived from the current
++      // floor's furniture (A* on the scene nav grid). It never feeds the
++      // GitHub/QA/SMS immersive overlays, which stay keyed to their own triggers.
++      const sofiaTarget = sofiaTargetByAgentId[agent.id] ?? null;
++      const explicitDeskHold = Boolean(deskHoldByAgentId[agent.id]) || Boolean(sofiaDeskHoldByAgentId[agent.id]);
+       const explicitGymHold = Boolean(gymHoldByAgentId[agent.id]);
+       const explicitSmsBoothHold = Boolean(smsBoothHoldByAgentId[agent.id]);
+       const explicitPhoneBoothHold = Boolean(phoneBoothHoldByAgentId[agent.id]);
+@@ -1102,7 +1120,8 @@ function useAgentTick(
+       const effectiveStatus: OfficeAgent["status"] =
+         agent.status === "error"
+           ? "error"
+-          : explicitMeetingHold ||
++          : Boolean(sofiaTarget) ||
++              explicitMeetingHold ||
+               explicitDeskHold ||
+               explicitGymHold ||
+               explicitSmsBoothHold ||
+@@ -1116,8 +1135,46 @@ function useAgentTick(
+ 
+       let ns: Partial<RenderAgent> = {};
+       if (existing) {
+-        ns = { ...existing };
+-        if (explicitMeetingHold && meetingTarget) {
++        ns = { ...existing, sofiaPose: undefined, sofiaFacing: undefined };
++        if (sofiaTarget) {
++          ns.pingPongUntil = undefined;
++          ns.pingPongTargetX = undefined;
++          ns.pingPongTargetY = undefined;
++          ns.pingPongFacing = undefined;
++          ns.pingPongPartnerId = undefined;
++          ns.pingPongTableUid = undefined;
++          ns.pingPongSide = undefined;
++          ns.walkSpeed =
++            existing.pingPongPreviousWalkSpeed ?? existing.walkSpeed;
++          ns.pingPongPreviousWalkSpeed = undefined;
++          ns.interactionTarget = undefined;
++          ns.phoneBoothStage = undefined;
++          ns.smsBoothStage = undefined;
++          ns.serverRoomStage = undefined;
++          ns.gymStage = undefined;
++          ns.qaLabStage = undefined;
++          ns.qaLabStationType = undefined;
++          ns.workoutStyle = undefined;
++          ns.sofiaPose = sofiaTarget.pose;
++          ns.sofiaFacing = sofiaTarget.facing;
++          const targetChanged =
++            existing.targetX !== sofiaTarget.x ||
++            existing.targetY !== sofiaTarget.y ||
++            existing.sofiaPose !== sofiaTarget.pose;
++          ns.targetX = sofiaTarget.x;
++          ns.targetY = sofiaTarget.y;
++          if (targetChanged) {
++            ns.path = planPath(existing.x, existing.y, sofiaTarget.x, sofiaTarget.y);
++          }
++          const arrived =
++            Math.hypot(existing.x - sofiaTarget.x, existing.y - sofiaTarget.y) < 15;
++          ns.state = arrived
++            ? sofiaTarget.pose === "sit"
++              ? "sitting"
++              : "standing"
++            : "walking";
++          if (arrived) ns.facing = sofiaTarget.facing;
++        } else if (explicitMeetingHold && meetingTarget) {
+           ns.pingPongUntil = undefined;
+           ns.pingPongTargetX = undefined;
+           ns.pingPongTargetY = undefined;
+@@ -1763,6 +1820,8 @@ function useAgentTick(
+     pickSpawnPoint,
+     planPath,
+     resolveMeetingTarget,
++    sofiaDeskHoldByAgentId,
++    sofiaTargetByAgentId,
+     standupActive,
+     standupMeeting,
+   ]);
+@@ -2057,8 +2116,11 @@ function useAgentTick(
+                 frame: agent.frame + 1,
+               };
+             }
+-            ns =
+-              agent.interactionTarget === "sms_booth"
++            ns = agent.sofiaPose
++              ? agent.sofiaPose === "sit"
++                ? "sitting"
++                : "standing"
++              : agent.interactionTarget === "sms_booth"
+                 ? "standing"
+                 : agent.interactionTarget === "phone_booth"
+                   ? "standing"
+@@ -2069,7 +2131,9 @@ function useAgentTick(
+                       : agent.interactionTarget === "qa_lab"
+                         ? "standing"
+                         : "sitting";
+-            if (agent.interactionTarget === "sms_booth") {
++            if (agent.sofiaPose && agent.sofiaFacing !== undefined) {
++              nf = agent.sofiaFacing;
++            } else if (agent.interactionTarget === "sms_booth") {
+               nf = agent.facing;
+             } else if (agent.interactionTarget === "phone_booth") {
+               nf = agent.facing;
+@@ -2261,41 +2325,6 @@ const buildInitialFurnitureLayout = (
+     ),
+   );
+ 
+-type SofiaTwinSceneState = {
+-  mode: "nominal" | "shadow" | "audit" | "incident" | "simulation";
+-  healthScore: number;
+-  incidentCount: number;
+-  shadowCandidateCount: number;
+-  shadowCompareCount: number;
+-  simulationCount: number;
+-  memoryAnchorCount: number;
+-  activeProjects: string[];
+-  activeAgents: string[];
+-  shadowHumanCount?: number;
+-};
+-
+-const DEFAULT_SOFIA_TWIN_SCENE_STATE: SofiaTwinSceneState = {
+-  mode: "nominal",
+-  healthScore: 100,
+-  incidentCount: 0,
+-  shadowCandidateCount: 0,
+-  shadowCompareCount: 0,
+-  simulationCount: 0,
+-  memoryAnchorCount: 0,
+-  activeProjects: [],
+-  activeAgents: [],
+-};
+-
+-const sofiaTwinSceneSignature = (state: SofiaTwinSceneState) =>
+-  [
+-    state.mode,
+-    Math.min(5, Math.max(0, state.shadowCandidateCount - state.shadowCompareCount)),
+-    Math.min(6, state.activeProjects.length),
+-    Math.min(3, state.simulationCount),
+-    Math.min(8, state.memoryAnchorCount),
+-    Math.min(5, state.shadowHumanCount ?? 0),
+-  ].join("|");
+-
+ class SofiaSceneErrorBoundary extends Component<{ label: string; children?: ReactNode }, { failed: boolean }> {
+   state = { failed: false };
+   static getDerivedStateFromError() {
+@@ -2309,99 +2338,6 @@ class SofiaSceneErrorBoundary extends Component<{ label: string; children?: Reac
+   }
+ }
+ 
+-function SofiaOpsSceneSignals({ state }: { state: SofiaTwinSceneState }) {
+-  const pendingGhosts = Math.min(
+-    5,
+-    Math.max(0, state.shadowCandidateCount - state.shadowCompareCount),
+-  );
+-  const incident = state.mode === "incident";
+-  const simulation = state.mode === "simulation";
+-  const audit = state.mode === "audit";
+-  const shadow = state.mode === "shadow" || pendingGhosts > 0;
+-  const projectCount = Math.min(6, state.activeProjects.length);
+-  const portalCount = Math.min(3, state.simulationCount);
+-  const memoryCount = Math.min(8, state.memoryAnchorCount);
+-
+-  return (
+-    <>
+-      <pointLight
+-        position={[0, incident ? 4.2 : 3.2, 0]}
+-        color={incident ? "#ff334d" : simulation ? "#22d3ee" : audit ? "#f59e0b" : "#ffffff"}
+-        intensity={incident ? 5.5 : simulation ? 2.2 : audit ? 1.5 : 0}
+-        distance={incident ? 13 : 11}
+-        decay={2}
+-      />
+-      {incident ? (
+-        <mesh position={[0, 2.45, 0]}>
+-          <octahedronGeometry args={[0.22, 0]} />
+-          <meshBasicMaterial color="#ff3655" wireframe transparent opacity={0.9} />
+-        </mesh>
+-      ) : null}
+-      {projectCount > 0 ? (
+-        <group position={[0, 0, -3.15]}>
+-          {Array.from({ length: projectCount }).map((_, index) => {
+-            const offset = index - (projectCount - 1) / 2;
+-            const height = 0.7 + (index % 3) * 0.22;
+-            return (
+-              <group key={"project-" + index} position={[offset * 0.72, 0, 0]}>
+-                <mesh position={[0, height / 2, 0]}>
+-                  <boxGeometry args={[0.42, height, 0.42]} />
+-                  <meshBasicMaterial color="#22d3ee" transparent opacity={0.22} wireframe />
+-                </mesh>
+-              </group>
+-            );
+-          })}
+-        </group>
+-      ) : null}
+-      {portalCount > 0 ? (
+-        <group position={[3.4, 0.7, 1.8]} rotation={[Math.PI / 2, 0, 0]}>
+-          {Array.from({ length: portalCount }).map((_, index) => (
+-            <mesh key={"portal-" + index} position={[index * 0.48, 0, 0]}>
+-              <torusGeometry args={[0.24, 0.035, 8, 24]} />
+-              <meshBasicMaterial color="#67e8f9" transparent opacity={0.5} wireframe />
+-            </mesh>
+-          ))}
+-        </group>
+-      ) : null}
+-      {memoryCount > 0 ? (
+-        <group position={[-3.2, 0.12, 1.8]}>
+-          {Array.from({ length: memoryCount }).map((_, index) => (
+-            <mesh key={"memory-" + index} position={[(index % 4) * 0.28, 0.14 + Math.floor(index / 4) * 0.28, 0]}>
+-              <tetrahedronGeometry args={[0.08, 0]} />
+-              <meshBasicMaterial color="#fbbf24" transparent opacity={0.65} />
+-            </mesh>
+-          ))}
+-        </group>
+-      ) : null}
+-      {shadow ? (
+-        <group position={[0, 0, 2.7]}>
+-          {Array.from({ length: pendingGhosts }).map((_, index) => {
+-            const offset = index - (pendingGhosts - 1) / 2;
+-            return (
+-              <group key={index} position={[offset * 0.58, 0, 0]}>
+-                <mesh position={[0, 0.48, 0]}>
+-                  <cylinderGeometry args={[0.13, 0.16, 0.55, 10]} />
+-                  <meshBasicMaterial color="#a78bfa" transparent opacity={0.24} wireframe />
+-                </mesh>
+-                {index < Math.min(5, state.shadowHumanCount ?? 0) ? (
+-                  <mesh position={[0.32, 0.55, 0]}>
+-                    <boxGeometry args={[0.2, 0.7, 0.2]} />
+-                    <meshBasicMaterial color="#22d3ee" transparent opacity={0.35} wireframe />
+-                  </mesh>
+-                ) : null}
+-                <mesh position={[0, 0.86, 0]}>
+-                  <sphereGeometry args={[0.14, 12, 8]} />
+-                  <meshBasicMaterial color="#c4b5fd" transparent opacity={0.32} wireframe />
+-                </mesh>
+-              </group>
+-            );
+-          })}
+-        </group>
+-      ) : null}
+-    </>
+-  );
+-}
+-
+ export function RetroOffice3D({
+   agents,
+   officeCenterSignal = 0,
+@@ -2804,22 +2740,6 @@ export function RetroOffice3D({
+   // New Idea 7: heatmap mode.
+   const [heatmapMode, setHeatmapMode] = useState(false);
+   const [trailMode, setTrailMode] = useState(false);
+-  const [sofiaTwinScene, setSofiaTwinScene] = useState<SofiaTwinSceneState>(DEFAULT_SOFIA_TWIN_SCENE_STATE);
+-  useEffect(() => {
+-    const holder = window as Window & { __SOFIA_OPS_TWIN_STATE?: SofiaTwinSceneState };
+-    let lastSignature = "";
+-    const apply = (detail: SofiaTwinSceneState | undefined) => {
+-      if (!detail || typeof detail.mode !== "string") return;
+-      const signature = sofiaTwinSceneSignature(detail);
+-      if (signature === lastSignature) return;
+-      lastSignature = signature;
+-      setSofiaTwinScene(detail);
+-    };
+-    apply(holder.__SOFIA_OPS_TWIN_STATE);
+-    const onDirector = (event: Event) => apply((event as CustomEvent<SofiaTwinSceneState>).detail);
+-    window.addEventListener("sofia-ops:director", onDirector);
+-    return () => window.removeEventListener("sofia-ops:director", onDirector);
+-  }, []);
+   const heatGridRef = useRef<Uint16Array | null>(null);
+   // E3 Idea 1: mood emoji reactions above agent chips.
+   const [moodByAgentId, setMoodByAgentId] = useState<
+@@ -2959,6 +2879,27 @@ export function RetroOffice3D({
+     () => getMeetingSeatLocations(furniture),
+     [furniture],
+   );
++  // Sofia Spatial OS: one world view (live or replay) drives movement + scene.
++  const sofiaView = useSofiaWorld();
++  const sofiaFloorId = PRESET_FLOOR[layoutPreset] ?? null;
++  // Stations/seats derived from this floor's furniture and validated with A*.
++  const sofiaLayout = useMemo(
++    () => (sofiaFloorId ? resolveSpatialLayout(furniture, sofiaFloorId, meetingSeatLocations) : null),
++    [furniture, meetingSeatLocations, sofiaFloorId],
++  );
++  const sofiaWarSeats = sofiaLayout?.warSeats ?? EMPTY_SOFIA_SEATS;
++  const sofiaAnchors = sofiaLayout?.anchors ?? null;
++  const sofiaTargets = useMemo(
++    () =>
++      sofiaAnchors
++        ? resolveSofiaTargets(sofiaView.world.zoneByAgentId, sofiaAnchors, sofiaWarSeats, sofiaLayout?.stands)
++        : EMPTY_SOFIA_TARGET_SET,
++    [sofiaAnchors, sofiaLayout, sofiaView.world.zoneByAgentId, sofiaWarSeats],
++  );
++  const sofiaAgentNames = useMemo(
++    () => new Map(agents.map((agent) => [agent.id, agent.name] as [string, string])),
++    [agents],
++  );
+ 
+   // Keep a stable ref to furniture so the tick callback can read it without
+   // being recreated every time furniture changes.
+@@ -3033,6 +2974,8 @@ export function RetroOffice3D({
+     resolvedQaHoldByAgentId,
+     resolvedGithubReviewByAgentId,
+     standupMeeting,
++    sofiaTargets.targets,
++    sofiaTargets.deskHolds,
+   );
+   useEffect(() => {
+     const syncRenderAgentUi = () => {
+@@ -3098,6 +3041,7 @@ export function RetroOffice3D({
+       const [wx, , wz] = toWorld(agent.x, agent.y);
+       orbitRef.current.target.set(wx, 0, wz);
+       orbitRef.current.update();
++      sofiaWorld.inspect({ kind: "agent", id: agentId });
+       onAgentChatSelect?.(agentId);
+     },
+     [onAgentChatSelect, renderAgentLookupRef],
+@@ -5442,11 +5386,15 @@ export function RetroOffice3D({
+               agentLookupRef={renderAgentLookupRef}
+             />
+ 
+-            {/* Sofia Ops world director: cheap scene-level signals, no extra API/GPU service. */}
+-            <SofiaOpsSceneSignals state={sofiaTwinScene} />
+-            <ambientLight
+-              intensity={sofiaTwinScene.mode === "incident" ? 0.56 : sofiaTwinScene.mode === "shadow" ? 0.64 : 0.72}
+-              color={sofiaTwinScene.mode === "incident" ? "#ffd0d5" : sofiaTwinScene.mode === "shadow" ? "#ddd6fe" : "#d8d4c8"}
++            {/* Sofia Spatial OS: stations, War Room, Shadow Twin, auras, projects, alert light, auto-follow. */}
++            <SofiaSpatialLayer
++              view={sofiaView}
++              layoutPreset={layoutPreset}
++              anchors={sofiaAnchors}
++              agentLookupRef={renderAgentLookupRef}
++              orbitRef={orbitRef}
++              followRef={followAgentIdRef}
++              agentNames={sofiaAgentNames}
+             />
+             <directionalLight
+               position={[8, 14, 6]}
+diff --git a/src/features/retro-office/core/navigation.ts b/src/features/retro-office/core/navigation.ts
+index 952eb75..b538edf 100644
+--- a/src/features/retro-office/core/navigation.ts
++++ b/src/features/retro-office/core/navigation.ts
+@@ -104,6 +104,28 @@ export function buildNavGrid(furniture: FurnitureItem[]): NavGrid {
+     }
+   }
+ 
++  // Doors are passable, but the padding of the two wall segments around a
++  // narrow door can seal its gap on the 25px grid (custom layouts such as the
++  // Sofia floors). Re-open the door footprint, extended one cell across the wall.
++  for (const item of furniture) {
++    if (item.type !== "door") continue;
++    const bounds = getItemBounds(item);
++    const horizontal = bounds.w >= bounds.h;
++    const x1 = horizontal ? bounds.x + 2 : bounds.x - GRID_CELL;
++    const x2 = horizontal ? bounds.x + bounds.w - 2 : bounds.x + bounds.w + GRID_CELL;
++    const y1 = horizontal ? bounds.y - GRID_CELL : bounds.y + 2;
++    const y2 = horizontal ? bounds.y + bounds.h + GRID_CELL : bounds.y + bounds.h - 2;
++    const c1 = Math.max(1, Math.floor(x1 / GRID_CELL));
++    const c2 = Math.min(GRID_COLS - 2, Math.floor(x2 / GRID_CELL));
++    const r1 = Math.max(1, Math.floor(y1 / GRID_CELL));
++    const r2 = Math.min(GRID_ROWS - 2, Math.floor(y2 / GRID_CELL));
++    for (let row = r1; row <= r2; row += 1) {
++      for (let column = c1; column <= c2; column += 1) {
++        grid[row * GRID_COLS + column] = 0;
++      }
++    }
++  }
++
+   for (let column = 0; column < GRID_COLS; column += 1) {
+     grid[column] = 1;
+     grid[(GRID_ROWS - 1) * GRID_COLS + column] = 1;
+diff --git a/src/features/retro-office/core/types.ts b/src/features/retro-office/core/types.ts
+index 97f3dcc..7270821 100644
+--- a/src/features/retro-office/core/types.ts
++++ b/src/features/retro-office/core/types.ts
+@@ -62,6 +62,9 @@ export type RenderAgent = SceneActor & {
+   workoutStyle?: "run" | "lift" | "bike" | "box" | "row" | "stretch";
+   janitorRouteIndex?: number;
+   janitorPauseUntil?: number;
++  // Sofia World Director destination pose (stand at a station / sit at a War Room seat).
++  sofiaPose?: "stand" | "sit";
++  sofiaFacing?: number;
+ };
+ 
+ export type FurnitureItem = {
+diff --git a/src/features/sofia-ops/SofiaOpsHud.tsx b/src/features/sofia-ops/SofiaOpsHud.tsx
+index 5a04806..050a887 100644
+--- a/src/features/sofia-ops/SofiaOpsHud.tsx
++++ b/src/features/sofia-ops/SofiaOpsHud.tsx
+@@ -1,188 +1,437 @@
+ "use client";
+ 
++// Sofia Spatial OS — HUD. Thin layer over the world view: the scene is the
++// primary display; this adds banners, the inspector, replay timeline, floor
++// map and the Event Harness. All state comes from the world store.
++
+ import { useEffect, useMemo, useState } from "react";
+ import { SOFIA_OPS_CAPABILITIES, SOFIA_OPS_VERSION } from "@/lib/sofia-ops/config";
+-import { getSofiaOpsEvents, subscribeSofiaOpsEvents, type SofiaOpsEvent } from "@/lib/sofia-ops/eventBus";
+-import { deriveTwinSnapshot, replayEventsAt, type TwinEvent } from "@/lib/sofia-ops/twinEngine";
+-import type { SofiaWarRoom } from "@/lib/sofia-ops/worldDirector";
++import { sofiaWorld, useSofiaWorld, type SofiaWorldView } from "@/lib/sofia-ops/worldStore";
++import {
++  FLOOR_LABEL,
++  STATE_LABEL,
++  ZONE_FLOOR,
++  ZONE_LABEL,
++  slugProject,
++  type SofiaFloorId,
++  type WorldEvent,
++  type WorldMode,
++  type ZoneId,
++} from "@/lib/sofia-ops/worldState";
++
++type Tab = "live" | "war" | "shadow" | "replay" | "floors" | "projects" | "sim" | "system";
++
++const TABS: { id: Tab; label: string }[] = [
++  { id: "live", label: "ao vivo" },
++  { id: "war", label: "war room" },
++  { id: "shadow", label: "shadow" },
++  { id: "replay", label: "replay" },
++  { id: "floors", label: "andares" },
++  { id: "projects", label: "projetos" },
++  { id: "sim", label: "simular" },
++  { id: "system", label: "sistema" },
++];
++
++const MODE_LABEL: Record<WorldMode, string> = {
++  nominal: "NOMINAL",
++  working: "TRABALHANDO",
++  deploy: "DEPLOY",
++  audit: "AUDITORIA",
++  shadow: "SHADOW",
++  incident: "INCIDENTE",
++  recovery: "RECUPERAÇÃO",
++};
++
++const MODE_CLASS: Record<WorldMode, string> = {
++  nominal: "border-cyan-400/30 bg-[#071019]/92 text-cyan-100",
++  working: "border-sky-400/35 bg-[#071019]/92 text-sky-100",
++  deploy: "border-sky-400/45 bg-sky-950/90 text-sky-100",
++  audit: "border-amber-400/45 bg-amber-950/90 text-amber-100",
++  shadow: "border-violet-400/45 bg-violet-950/90 text-violet-100",
++  incident: "border-red-400/50 bg-red-950/92 text-red-100",
++  recovery: "border-emerald-400/45 bg-emerald-950/90 text-emerald-100",
++};
+ 
+-type Tab = "live" | "replay" | "shadow" | "war" | "topology" | "system";
++const ZONE_PURPOSE: Record<ZoneId, string> = {
++  desk: "trabalho dos agentes nas mesas (runs reais do OpenClaw)",
++  infra: "deploys, serviços Railway e disponibilidade",
++  audit: "workflows n8n, revisão e auditoria",
++  qa: "testes, regressão e qualidade",
++  shadow: "Shadow Twin: candidata da Sofia vs resposta humana (nada é enviado)",
++  warroom: "coordenação de incidentes críticos",
++  intel: "analytics, padrões e comparação",
++};
+ 
+-const badge = (severity: TwinEvent["severity"]) =>
++const FLOOR_ORDER: SofiaFloorId[] = ["openclaw-ground", "audit-second", "dev-third", "infra-fourth", "intel-fifth", "command-sixth"];
++const HARNESS_KINDS = ["deploy.started", "deploy.success", "deploy.failed", "n8n.failed", "audit.started", "shadow.candidate", "shadow.human", "shadow.compare", "incident", "recovery"];
++
++const badge = (severity: WorldEvent["severity"]) =>
+   severity === "critical" ? "text-red-300 border-red-500/40 bg-red-950/60" :
+   severity === "warning" ? "text-amber-200 border-amber-500/35 bg-amber-950/50" :
+   severity === "success" ? "text-emerald-200 border-emerald-500/35 bg-emerald-950/45" :
+   "text-cyan-200 border-cyan-500/30 bg-cyan-950/40";
+ 
+-const eventHas = (event: TwinEvent, value: string) =>
+-  (event.type + " " + event.summary + " " + (event.payloadText || "")).toLowerCase().includes(value);
+-
+-export function SofiaOpsHud({ floorLabel }: { floorLabel: string }) {
+-  const [open, setOpen] = useState(false);
+-  const [tab, setTab] = useState<Tab>("live");
+-  const [runtimeEvents, setRuntimeEvents] = useState<SofiaOpsEvent[]>(() => getSofiaOpsEvents());
+-  const [externalEvents, setExternalEvents] = useState<TwinEvent[]>([]);
+-  const [replayIndex, setReplayIndex] = useState(0);
++const clock = (ts: number) => new Date(ts).toLocaleTimeString("pt-BR");
++const elapsed = (from: number, to: number = Date.now()) => {
++  const seconds = Math.max(0, Math.floor((to - from) / 1000));
++  return String(Math.floor(seconds / 60)).padStart(2, "0") + ":" + String(seconds % 60).padStart(2, "0");
++};
+ 
+-  const [clockTick, setClockTick] = useState(0);
++function useTick(ms: number, enabled = true) {
++  const [, setTick] = useState(0);
+   useEffect(() => {
+-    const timer = window.setInterval(() => setClockTick((value) => value + 1), 30000);
++    if (!enabled) return;
++    const timer = window.setInterval(() => setTick((value) => value + 1), ms);
+     return () => window.clearInterval(timer);
+-  }, []);
+-  useEffect(() => {
+-    let frame: number | null = null;
+-    const unsubscribe = subscribeSofiaOpsEvents(() => {
+-      if (frame !== null) return;
+-      frame = window.setTimeout(() => {
+-        frame = null;
+-        setRuntimeEvents(getSofiaOpsEvents());
+-      }, 400);
+-    });
+-    return () => {
+-      if (frame !== null) window.clearTimeout(frame);
+-      unsubscribe();
+-    };
+-  }, []);
+-  useEffect(() => {
+-    let active = true;
+-    let lastKey = "";
+-    const pull = async () => {
+-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+-      try {
+-        const response = await fetch("/api/sofia-ops/events", { cache: "no-store", credentials: "same-origin" });
+-        if (!response.ok) return;
+-        const data = await response.json() as { events?: TwinEvent[] };
+-        if (!active || !Array.isArray(data.events)) return;
+-        const key = data.events.length + ":" + (data.events[0]?.id ?? "") + ":" + (data.events[data.events.length - 1]?.id ?? "");
+-        if (key === lastKey) return;
+-        lastKey = key;
+-        setExternalEvents(data.events);
+-      } catch {}
+-    };
+-    void pull();
+-    const timer = window.setInterval(() => void pull(), 5000);
+-    return () => { active = false; window.clearInterval(timer); };
+-  }, []);
+-
+-  const events = useMemo<TwinEvent[]>(() => {
+-    const byId = new Map<string, TwinEvent>();
+-    for (const event of [...runtimeEvents, ...externalEvents] as TwinEvent[]) byId.set(event.id, event);
+-    return [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, 240);
+-  }, [externalEvents, runtimeEvents]);
+-
+-  useEffect(() => {
+-    if (replayIndex > Math.max(0, events.length - 1)) setReplayIndex(Math.max(0, events.length - 1));
+-  }, [events.length, replayIndex]);
+-
+-  // clockTick re-derives the snapshot so the 5-minute incident window can expire.
+-  // eslint-disable-next-line react-hooks/exhaustive-deps
+-  const snapshot = useMemo(() => deriveTwinSnapshot(events), [events, clockTick]);
+-  const selectedReplay = events[replayIndex] ?? null;
+-  const replayEvents = useMemo(() => selectedReplay ? replayEventsAt(events, selectedReplay.ts) : events, [events, selectedReplay]);
+-  const replaySnapshot = useMemo(() => deriveTwinSnapshot(replayEvents), [replayEvents]);
+-  const shadowEvents = useMemo(() => events.filter((event) => eventHas(event, "shadow")), [events]);
+-  const incidents = useMemo(() => events.filter((event) => event.severity === "critical").slice(0, 12), [events]);
++  }, [ms, enabled]);
++}
+ 
+-  useEffect(() => {
+-    (window as Window & { __SOFIA_OPS_TWIN_STATE?: typeof snapshot }).__SOFIA_OPS_TWIN_STATE = snapshot;
+-    (window as Window & { __SOFIA_OPS_EVENTS?: TwinEvent[] }).__SOFIA_OPS_EVENTS = events;
+-    window.dispatchEvent(new CustomEvent("sofia-ops:events"));
+-    window.dispatchEvent(new CustomEvent("sofia-ops:director", { detail: snapshot }));
+-  }, [snapshot, events]);
++function EventRow({ event }: { event: WorldEvent }) {
++  return (
++    <div className={"rounded border px-2 py-1.5 text-[9px] " + badge(event.severity)}>
++      <div className="flex items-center justify-between gap-2">
++        <span className="font-semibold">
++          {event.synthetic ? <span className="mr-1 rounded bg-white/15 px-1 text-[8px]">SIM</span> : null}
++          {event.source.toUpperCase()} · {event.type}
++        </span>
++        <span className="opacity-60">{clock(event.ts)}</span>
++      </div>
++      <div className="mt-0.5 truncate opacity-75">{(event.agentId ? event.agentId + " · " : "") + event.summary}</div>
++    </div>
++  );
++}
+ 
+-  const [warRoom, setWarRoom] = useState<SofiaWarRoom | null>(null);
+-  useEffect(() => {
+-    const onWarRoom = (event: Event) => setWarRoom((event as CustomEvent<SofiaWarRoom | null>).detail ?? null);
+-    window.addEventListener("sofia-ops:war-room", onWarRoom);
+-    return () => window.removeEventListener("sofia-ops:war-room", onWarRoom);
+-  }, []);
+-  useEffect(() => {
+-    if (warRoom) { setOpen(true); setTab("war"); }
+-  }, [warRoom?.incidentId]); // eslint-disable-line react-hooks/exhaustive-deps
+-  const statusText = snapshot.mode === "incident" ? "ALERTA" : events.length ? "LIVE" : "READY";
++function Inspector({ view }: { view: SofiaWorldView }) {
++  useTick(1000, Boolean(view.inspect));
++  const target = view.inspect;
++  if (!target) return null;
++  const world = view.world;
++  const names = new Map(view.agents.map((agent) => [agent.id, agent.name ?? agent.id]));
++  let title = "";
++  let rows: [string, string][] = [];
++  let events: WorldEvent[] = [];
++  if (target.kind === "agent") {
++    const agent = world.agents[target.id];
++    const runtime = view.agents.find((entry) => entry.id === target.id);
++    title = (names.get(target.id) ?? target.id) + " · agente";
++    rows = [
++      ["estado espacial", agent ? STATE_LABEL[agent.state] : "—"],
++      ["zona", agent?.zone ? ZONE_LABEL[agent.zone] : "livre"],
++      ["motivo", agent?.reason || "—"],
++      ["OpenClaw", runtime?.status ?? "—"],
++      ["session", runtime?.sessionKey ?? "—"],
++      ["run", runtime?.runId ?? "nenhum ativo"],
++      ["última atividade", runtime?.lastActivityAt ? clock(runtime.lastActivityAt) : "—"],
++    ];
++    if (agent?.substituteFor) rows.push(["substituindo", agent.substituteFor + " (indisponível)"]);
++    events = view.events.filter((event) => event.agentId === target.id || event.id === agent?.eventId).slice(0, 6);
++  } else if (target.kind === "zone") {
++    const zone = target.id as ZoneId;
++    const state = world.zones[zone];
++    title = ZONE_LABEL[zone] + " · estação";
++    rows = [
++      ["função", ZONE_PURPOSE[zone]],
++      ["andar", FLOOR_LABEL[ZONE_FLOOR[zone]]],
++      ["estado", state?.level ?? "idle"],
++      ["responsável", state?.owner ? names.get(state.owner) ?? state.owner : "—"],
++      ["atividade", state?.label ?? "—"],
++      ["eventos (90s)", String(state?.count ?? 0)],
++    ];
++    events = view.events.filter((event) => event.id === state?.eventId).slice(0, 4);
++  } else if (target.kind === "incident") {
++    const incident = world.incident;
++    title = "Incidente · " + (incident?.type ?? target.id);
++    if (incident) {
++      rows = [
++        ["origem", incident.source + (incident.synthetic ? " (simulado)" : "")],
++        ["projeto", incident.project],
++        ["estado", incident.state],
++        ["aberto", clock(incident.openedAt) + " · há " + elapsed(incident.openedAt, view.replay.at ?? undefined)],
++        ["responsáveis", incident.responsible.map((id) => names.get(id) ?? id).join(", ") || "—"],
++        ["resolvido", incident.resolvedAt ? clock(incident.resolvedAt) : "não"],
++      ];
++      for (const item of incident.evidence) rows.push(["evidência", item]);
++      events = incident.timeline.slice().reverse().map((item) => ({ ...item, source: incident.source }) as WorldEvent);
++    } else {
++      rows = [["estado", "encerrado"]];
++    }
++  } else {
++    const project = world.projects.find((entry) => entry.id === target.id);
++    title = (project?.label ?? target.id) + " · projeto";
++    rows = project
++      ? [
++          ["saúde", project.health + "%"],
++          ["incidente", project.incident ? "sim" : "não"],
++          ["eventos (5 min)", String(project.recentCount)],
++          ["eventos (sessão)", String(project.eventCount)],
++          ["origens", project.sources.join(", ") || "—"],
++          ["último", project.lastSummary || "—"],
++        ]
++      : [["estado", "sem dados"]];
++    events = view.events.filter((event) => slugProject(event.project) === target.id).slice(0, 5);
++  }
++  return (
++    <div data-testid="sofia-inspector" className="pointer-events-auto absolute left-3 top-16 z-[85] w-[min(86vw,320px)] rounded-xl border border-cyan-500/25 bg-[#071019]/95 p-2 font-mono shadow-2xl backdrop-blur-md">
++      <div className="flex items-center justify-between gap-2">
++        <div className="truncate text-[11px] font-bold text-cyan-100">{title}</div>
++        <button type="button" onClick={() => sofiaWorld.inspect(null)} className="rounded px-2 py-0.5 text-[10px] text-white/60 hover:bg-white/10">✕</button>
++      </div>
++      {view.replay.active ? <div className="mt-1 text-[9px] text-amber-200">estado no instante do replay</div> : null}
++      <div className="mt-1.5 space-y-0.5 text-[9px]">
++        {rows.map(([key, value], index) => (
++          <div key={key + index} className="flex gap-2"><span className="w-24 shrink-0 text-white/40">{key}</span><span className="break-all text-white/80">{value}</span></div>
++        ))}
++      </div>
++      {events.length ? <div className="mt-1.5 max-h-28 space-y-1 overflow-auto">{events.map((event) => <EventRow key={event.id} event={event} />)}</div> : null}
++    </div>
++  );
++}
+ 
++function Banners({ view }: { view: SofiaWorldView }) {
++  const world = view.world;
++  const incident = world.incident;
++  useTick(1000, Boolean(incident));
++  const names = new Map(view.agents.map((agent) => [agent.id, agent.name ?? agent.id]));
+   return (
+-    <div className="pointer-events-auto absolute bottom-3 right-3 z-[80] flex max-w-[calc(100%-1.5rem)] flex-col items-end gap-2 font-mono">
+-      {open ? (
+-        <div className="w-[min(94vw,430px)] overflow-hidden rounded-xl border border-cyan-500/25 bg-[#071019]/95 shadow-2xl backdrop-blur-md">
+-          <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+-            <div>
+-              <div className="text-[11px] font-bold tracking-[0.16em] text-cyan-200">SOFIA DIGITAL TWIN</div>
+-              <div className="text-[9px] text-white/45">{floorLabel} · v{SOFIA_OPS_VERSION} · saúde {snapshot.healthScore}%</div>
+-            </div>
+-            <button type="button" onClick={() => setOpen(false)} className="rounded px-2 py-1 text-[10px] text-white/60 hover:bg-white/10">FECHAR</button>
++    <div className="pointer-events-none absolute left-1/2 top-3 z-[84] flex w-[min(92vw,460px)] -translate-x-1/2 flex-col items-center gap-1.5 font-mono">
++      {view.gateway.state === "reconnecting" ? (
++        <div data-testid="sofia-reconnecting" className="rounded-full border border-amber-400/40 bg-amber-950/90 px-3 py-1 text-[10px] font-bold tracking-[0.16em] text-amber-100">RECONNECTING · cena preservada</div>
++      ) : null}
++      {view.replay.active && view.replay.at ? (
++        <div data-testid="sofia-replay-banner" className="pointer-events-auto flex items-center gap-2 rounded-full border border-amber-300/50 bg-[#1c1406]/95 px-3 py-1 text-[10px] text-amber-100">
++          <span className="font-bold tracking-[0.16em]">REPLAY · {clock(view.replay.at)}</span>
++          <button type="button" onClick={() => sofiaWorld.setReplayIndex(null)} className="rounded bg-amber-400/20 px-2 py-0.5 font-bold">LIVE</button>
++        </div>
++      ) : null}
++      {incident ? (
++        <button
++          type="button"
++          data-testid="sofia-war-banner"
++          onClick={() => sofiaWorld.inspect({ kind: "incident", id: incident.id })}
++          className={"pointer-events-auto w-full rounded-lg border px-3 py-1.5 text-left text-[10px] shadow-xl " + (incident.state === "recuperando" ? "border-emerald-400/45 bg-emerald-950/90 text-emerald-100" : "border-red-400/50 bg-red-950/92 text-red-100")}
++        >
++          <div className="font-bold tracking-[0.12em]">
++            {incident.state === "recuperando" ? "RECUPERADO · voltando às atividades" : "WAR ROOM · " + incident.state.toUpperCase() + " · " + elapsed(incident.openedAt, view.replay.at ?? undefined)}
++            {incident.synthetic ? " · SIMULADO" : ""}
+           </div>
++          <div className="truncate opacity-80">{incident.source} · {incident.type} · {incident.responsible.map((id) => names.get(id) ?? id).join(", ") || "convocando"}</div>
++        </button>
++      ) : null}
++    </div>
++  );
++}
+ 
+-          <div className="flex gap-1 overflow-x-auto border-b border-white/10 p-2 text-[9px]">
+-            {(["live", "replay", "shadow", "war", "topology", "system"] as Tab[]).map((name) => (
+-              <button key={name} type="button" onClick={() => setTab(name)} className={"whitespace-nowrap rounded px-2 py-1.5 uppercase " + (tab === name ? "bg-cyan-500/20 text-cyan-100" : "bg-white/5 text-white/45")}>{name}</button>
+-            ))}
+-          </div>
++export function SofiaOpsHud({ floorId, floorLabel, onSelectFloor }: { floorId: string; floorLabel: string; onSelectFloor?: (floorId: string) => void }) {
++  const view = useSofiaWorld();
++  const world = view.world;
++  const [open, setOpen] = useState(false);
++  const [tab, setTab] = useState<Tab>("live");
++  const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
++  const names = useMemo(() => new Map(view.agents.map((agent) => [agent.id, agent.name ?? agent.id])), [view.agents]);
++  const focus = world.focus;
++  const focusFloorElsewhere = focus && focus.floorId !== floorId && FLOOR_ORDER.includes(floorId as SofiaFloorId) ? focus.floorId : null;
++
++  const fire = async (body: Record<string, unknown>) => {
++    setHarnessMessage("enviando…");
++    try {
++      const response = await fetch("/api/sofia-ops/harness", {
++        method: "POST",
++        credentials: "same-origin",
++        headers: { "content-type": "application/json", "x-sofia-harness": "1" },
++        body: JSON.stringify(body),
++      });
++      const data = (await response.json().catch(() => ({}))) as { error?: string; durationMs?: number; removed?: number };
++      setHarnessMessage(response.ok ? (body.scenario === "full" ? "cenário em execução (" + Math.round((data.durationMs ?? 0) / 1000) + "s)" : body.scenario === "reset" ? "simulados removidos: " + (data.removed ?? 0) : "evento enviado à Event Fabric") : "erro: " + (data.error ?? response.status));
++      sofiaWorld.refresh();
++    } catch {
++      setHarnessMessage("falha de rede");
++    }
++  };
++
++  const shadowEvents = view.events.filter((event) => event.type.toLowerCase().startsWith("shadow"));
++  const incidents = view.events.filter((event) => event.severity === "critical").slice(0, 10);
++  const liveActive = Object.entries(world.agents).filter(([, agent]) => agent.state !== "idle");
+ 
+-          <div className="p-2">
+-            {tab === "live" ? (
++  return (
++    <>
++      <Banners view={view} />
++      <Inspector view={view} />
++      {view.replay.active ? <div className="pointer-events-none absolute inset-0 z-[70] border-[3px] border-amber-300/60" /> : null}
++      <div className="pointer-events-auto absolute bottom-3 right-3 z-[80] flex max-w-[calc(100%-1.5rem)] flex-col items-end gap-2 font-mono">
++        {open ? (
++          <div data-testid="sofia-panel" className="w-[min(94vw,430px)] overflow-hidden rounded-xl border border-cyan-500/25 bg-[#071019]/95 shadow-2xl backdrop-blur-md">
++            <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+               <div>
+-                <div className="grid grid-cols-3 gap-1.5 text-[9px]">
+-                  <div className="rounded border border-emerald-500/25 bg-emerald-950/30 p-2"><div className="text-white/45">FABRIC</div><div className="mt-1 text-emerald-200">LIVE</div></div>
+-                  <div className="rounded border border-violet-500/25 bg-violet-950/30 p-2"><div className="text-white/45">MODE</div><div className="mt-1 text-violet-200">{snapshot.mode.toUpperCase()}</div></div>
+-                  <div className={"rounded border p-2 " + (snapshot.incidentCount ? "border-red-500/35 bg-red-950/40" : "border-cyan-500/20 bg-cyan-950/25")}><div className="text-white/45">WAR ROOM</div><div className={"mt-1 " + (snapshot.incidentCount ? "text-red-200" : "text-cyan-200")}>{snapshot.incidentCount ? "INCIDENT" : "STANDBY"}</div></div>
++                <div className="text-[11px] font-bold tracking-[0.16em] text-cyan-200">SOFIA SPATIAL OS</div>
++                <div className="text-[9px] text-white/45">{floorLabel} · v{SOFIA_OPS_VERSION} · gateway {view.gateway.state}</div>
++              </div>
++              <button type="button" onClick={() => setOpen(false)} className="rounded px-2 py-1 text-[10px] text-white/60 hover:bg-white/10">FECHAR</button>
++            </div>
++            <div className="flex gap-1 overflow-x-auto border-b border-white/10 p-2 text-[9px]">
++              {TABS.map((entry) => (
++                <button key={entry.id} type="button" data-testid={"sofia-tab-" + entry.id} onClick={() => setTab(entry.id)} className={"whitespace-nowrap rounded px-2 py-1.5 uppercase " + (tab === entry.id ? "bg-cyan-500/20 text-cyan-100" : "bg-white/5 text-white/45")}>{entry.label}</button>
++              ))}
++            </div>
++            <div className="max-h-[52vh] overflow-auto p-2 text-[9px]">
++              {tab === "live" ? (
++                <div className="space-y-2">
++                  <div className="grid grid-cols-3 gap-1.5">
++                    <div className="rounded border border-white/10 bg-white/5 p-2"><div className="text-white/45">MODO</div><div className="mt-1 text-cyan-100">{MODE_LABEL[world.mode]}</div></div>
++                    <div className="rounded border border-white/10 bg-white/5 p-2"><div className="text-white/45">FOCO</div><div className="mt-1 truncate text-cyan-100">{focus ? ZONE_LABEL[focus.zone] : "—"}</div></div>
++                    <div className="rounded border border-white/10 bg-white/5 p-2"><div className="text-white/45">ATIVOS</div><div className="mt-1 text-cyan-100">{liveActive.length}/{Object.keys(world.agents).length}</div></div>
++                  </div>
++                  <div className="space-y-1">
++                    {Object.entries(world.agents).map(([id, agent]) => (
++                      <button key={id} type="button" onClick={() => sofiaWorld.inspect({ kind: "agent", id })} className="flex w-full items-center justify-between gap-2 rounded bg-white/5 px-2 py-1 text-left hover:bg-white/10">
++                        <span className="text-white/80">{names.get(id) ?? id}</span>
++                        <span className="truncate text-white/50">{STATE_LABEL[agent.state]}{agent.zone ? " · " + ZONE_LABEL[agent.zone] : ""}{agent.substituteFor ? " · subst. " + agent.substituteFor : ""}</span>
++                      </button>
++                    ))}
++                    {Object.keys(world.agents).length === 0 ? <div className="rounded bg-white/5 p-2 text-white/45">Aguardando agentes do gateway…</div> : null}
++                  </div>
++                  <div className="max-h-44 space-y-1 overflow-auto">
++                    {view.events.length === 0 ? <div className="rounded bg-white/5 px-2 py-2 text-white/45">Aguardando eventos…</div> : view.events.slice(0, 10).map((event) => <EventRow key={event.id} event={event} />)}
++                  </div>
+                 </div>
+-                <div className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 p-2 text-[9px]"><span className="text-white/45">WORLD DIRECTOR → </span><span className="text-cyan-200">{snapshot.recommendedFloor}</span><span className="text-white/35"> · {snapshot.recommendedReason}</span></div>
+-                <div className="mt-2 max-h-44 space-y-1 overflow-auto">
+-                  {events.length === 0 ? <div className="rounded bg-white/5 px-2 py-2 text-[10px] text-white/45">Aguardando eventos…</div> : events.slice(0, 9).map((event) => (
+-                    <div key={event.id} className={"rounded border px-2 py-1.5 text-[9px] " + badge(event.severity)}><div className="flex items-center justify-between gap-2"><span className="font-semibold">{event.source.toUpperCase()} · {event.type}</span><span className="opacity-60">{new Date(event.ts).toLocaleTimeString()}</span></div><div className="mt-0.5 truncate opacity-75">{event.summary}</div></div>
++              ) : null}
++
++              {tab === "war" ? (
++                <div className="space-y-2">
++                  {world.incident ? (
++                    <button type="button" onClick={() => sofiaWorld.inspect({ kind: "incident", id: world.incident!.id })} className={"w-full rounded border p-2 text-left " + (world.incident.state === "recuperando" ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-100" : "border-red-500/35 bg-red-950/35 text-red-100")}>
++                      <div className="font-semibold">{world.incident.type} · {world.incident.state}</div>
++                      <div className="mt-0.5 opacity-70">origem {world.incident.source} · aberto {clock(world.incident.openedAt)}</div>
++                      <div className="mt-0.5 opacity-70">responsáveis: {world.incident.responsible.map((id) => names.get(id) ?? id).join(", ") || "—"}</div>
++                      <div className="mt-0.5 truncate opacity-50">{world.incident.summary}</div>
++                    </button>
++                  ) : (
++                    <div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2 text-emerald-100">War Room em standby. Um evento crítico convoca os responsáveis automaticamente.</div>
++                  )}
++                  <div className="max-h-44 space-y-1 overflow-auto">{incidents.map((event) => <EventRow key={event.id} event={event} />)}</div>
++                </div>
++              ) : null}
++
++              {tab === "shadow" ? (
++                <div className="space-y-2">
++                  <div className="grid grid-cols-3 gap-1.5">
++                    <div className="rounded border border-violet-500/25 bg-violet-950/25 p-2"><div className="text-white/45">CANDIDATAS</div><div className="mt-1 text-violet-200">{world.shadow.counts.candidate}</div></div>
++                    <div className="rounded border border-cyan-500/20 bg-cyan-950/20 p-2"><div className="text-white/45">HUMANAS</div><div className="mt-1 text-cyan-200">{world.shadow.counts.human}</div></div>
++                    <div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2"><div className="text-white/45">COMPARADAS</div><div className="mt-1 text-emerald-200">{world.shadow.counts.compare}</div></div>
++                  </div>
++                  {world.shadow.compare ? <div className="rounded border border-emerald-500/25 bg-emerald-950/20 p-2 text-emerald-100">Última comparação: {world.shadow.compare.score !== null ? world.shadow.compare.score + "% · " : ""}{world.shadow.compare.verdict}</div> : null}
++                  <div className="max-h-40 space-y-1 overflow-auto">{shadowEvents.length ? shadowEvents.slice(0, 8).map((event) => <EventRow key={event.id} event={event} />) : <div className="rounded bg-white/5 p-2 text-white/45">Aguardando eventos <code>shadow.*</code>. Nenhuma mensagem é enviada por esta camada.</div>}</div>
++                </div>
++              ) : null}
++
++              {tab === "replay" ? (
++                <div className="space-y-2">
++                  <div className="rounded border border-amber-400/25 bg-amber-950/20 p-2 text-amber-100">
++                    {view.replay.active && view.replay.at ? "Cena em " + clock(view.replay.at) + " · modo " + MODE_LABEL[world.mode] : "LIVE · " + view.replay.total + " instantes guardados em RAM"}
++                  </div>
++                  <input
++                    aria-label="Replay timeline"
++                    data-testid="sofia-replay-slider"
++                    className="w-full"
++                    type="range"
++                    min={0}
++                    max={Math.max(0, view.replay.total - 1)}
++                    value={view.replay.active ? view.replay.index : Math.max(0, view.replay.total - 1)}
++                    onChange={(event) => sofiaWorld.setReplayIndex(Number(event.target.value))}
++                  />
++                  <div className="flex gap-1.5">
++                    <button type="button" onClick={() => sofiaWorld.setReplayIndex(Math.max(0, (view.replay.active ? view.replay.index : view.replay.total - 1) - 1))} className="rounded bg-white/10 px-2 py-1 text-white/80">◀ anterior</button>
++                    <button type="button" onClick={() => sofiaWorld.setReplayIndex((view.replay.active ? view.replay.index : view.replay.total - 1) + 1)} className="rounded bg-white/10 px-2 py-1 text-white/80">próximo ▶</button>
++                    <button type="button" onClick={() => sofiaWorld.setReplayIndex(null)} className="rounded bg-amber-400/20 px-2 py-1 font-bold text-amber-100">LIVE</button>
++                  </div>
++                  <div className="flex h-3 gap-px overflow-hidden rounded">
++                    {view.snapshots.slice(-60).map((entry, index) => (
++                      <div key={entry.at + ":" + index} className={"flex-1 " + (entry.mode === "incident" ? "bg-red-500/70" : entry.mode === "recovery" ? "bg-emerald-500/70" : entry.mode === "shadow" ? "bg-violet-500/70" : entry.mode === "audit" ? "bg-amber-500/70" : entry.mode === "deploy" ? "bg-sky-500/70" : "bg-white/15")} />
++                    ))}
++                  </div>
++                  <div className="text-white/35">Cada instante restaura agentes, destinos, incidente, Shadow Twin e salas. Somente RAM; histórico profundo desligado.</div>
++                </div>
++              ) : null}
++
++              {tab === "floors" ? (
++                <div className="space-y-1">
++                  {FLOOR_ORDER.map((floor, index) => (
++                    <button key={floor} type="button" onClick={() => onSelectFloor?.(floor)} className={"flex w-full items-center justify-between rounded border px-2 py-1.5 text-left " + (floor === floorId ? "border-cyan-400/40 bg-cyan-950/30" : "border-white/10 bg-white/5")}>
++                      <span className="text-white/80">{index + 1}º · {FLOOR_LABEL[floor]}</span>
++                      <span className={world.floorActivity[floor].hot ? "text-amber-200" : "text-white/40"}>{world.floorActivity[floor].hot ? "● ativo · " : ""}{world.floorActivity[floor].recent} eventos/5min</span>
++                    </button>
+                   ))}
+                 </div>
+-              </div>
+-            ) : null}
+-
+-            {tab === "replay" ? (
+-              <div className="text-[9px]">
+-                <div className="rounded border border-cyan-500/20 bg-cyan-950/20 p-2"><div className="text-white/45">RAM TIME MACHINE</div><div className="mt-1 text-cyan-100">{selectedReplay ? new Date(selectedReplay.ts).toLocaleTimeString() : "sem eventos"} · saúde {replaySnapshot.healthScore}% · modo {replaySnapshot.mode}</div></div>
+-                <input aria-label="Replay timeline" className="mt-3 w-full" type="range" min="0" max={Math.max(0, events.length - 1)} value={replayIndex} onChange={(event) => setReplayIndex(Number(event.target.value))} />
+-                <div className="mt-2 rounded bg-white/5 p-2 text-white/55">{selectedReplay ? selectedReplay.type + " · " + selectedReplay.summary : "O replay começa a funcionar assim que houver atividade. O histórico profundo permanece desligado."}</div>
+-                <div className="mt-2 text-white/35">Eventos existentes naquele ponto: {replayEvents.length}. Nada é salvo permanentemente.</div>
+-              </div>
+-            ) : null}
++              ) : null}
+ 
+-            {tab === "shadow" ? (
+-              <div className="text-[9px]">
+-                <div className="grid grid-cols-3 gap-1.5"><div className="rounded border border-violet-500/25 bg-violet-950/25 p-2"><div className="text-white/45">CANDIDATAS</div><div className="mt-1 text-violet-200">{snapshot.shadowCandidateCount}</div></div><div className="rounded border border-cyan-500/20 bg-cyan-950/20 p-2"><div className="text-white/45">HUMANAS</div><div className="mt-1 text-cyan-200">{snapshot.shadowHumanCount}</div></div><div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2"><div className="text-white/45">COMPARADAS</div><div className="mt-1 text-emerald-200">{snapshot.shadowCompareCount}</div></div></div>
+-                <div className="mt-2 max-h-44 space-y-1 overflow-auto">{shadowEvents.length ? shadowEvents.slice(0, 10).map((event) => <div key={event.id} className="rounded border border-violet-500/20 bg-violet-950/20 p-2 text-violet-100"><div>{event.type}</div><div className="mt-0.5 truncate opacity-60">{event.summary}</div></div>) : <div className="rounded bg-white/5 p-2 text-white/45">Shadow Twin operacional e aguardando eventos <code>shadow.*</code> da Sofia. Nenhuma mensagem é enviada por esta camada.</div>}</div>
+-              </div>
+-            ) : null}
++              {tab === "projects" ? (
++                <div className="space-y-1">
++                  {world.projects.map((project) => (
++                    <button key={project.id} type="button" onClick={() => sofiaWorld.inspect({ kind: "project", id: project.id })} className="flex w-full items-center justify-between rounded border border-white/10 bg-white/5 px-2 py-1.5 text-left">
++                      <span className="text-white/80">{project.label}{project.home ? " (este prédio)" : ""}</span>
++                      <span className={project.incident ? "text-red-300" : project.health >= 80 ? "text-emerald-300" : "text-amber-300"}>{project.health}% · {project.recentCount} ev</span>
++                    </button>
++                  ))}
++                  <div className="rounded bg-white/5 p-2 text-white/40">Eventos com o campo <code>project</code> criam uma torre no campus ao sul do prédio.</div>
++                </div>
++              ) : null}
+ 
+-            {tab === "war" ? (
+-              <div className="text-[9px]">
+-                <div className={"rounded border p-2 " + (snapshot.incidentCount ? "border-red-500/35 bg-red-950/35 text-red-100" : "border-emerald-500/20 bg-emerald-950/20 text-emerald-100")}><div className="font-semibold">{snapshot.incidentCount ? "SALA DE GUERRA ATIVA" : "SALA DE GUERRA EM STANDBY"}</div><div className="mt-1 opacity-60">{snapshot.incidentCount ? "Diretor recomenda o Command Center. Incidentes recentes: " + snapshot.incidentCount : "Nenhum incidente crítico nos últimos 5 minutos."}</div></div>
+-                {warRoom ? <div className="mt-2 rounded border border-red-500/30 bg-red-950/30 p-2 text-red-100"><div className="font-semibold">{warRoom.type}</div><div className="mt-0.5 opacity-70">origem: {warRoom.source} · estado: {warRoom.state}</div><div className="mt-0.5 opacity-70">responsáveis: {warRoom.responsibleAgentIds.join(", ") || "—"}</div><div className="mt-0.5 truncate opacity-50">{warRoom.summary}</div></div> : null}
+-                <div className="mt-2 max-h-44 space-y-1 overflow-auto">{incidents.map((event) => <div key={event.id} className="rounded border border-red-500/25 bg-red-950/25 p-2 text-red-100"><div>{event.source.toUpperCase()} · {event.type}</div><div className="mt-0.5 truncate opacity-60">{event.summary}</div></div>)}</div>
+-              </div>
+-            ) : null}
+-
+-            {tab === "topology" ? (
+-              <div className="space-y-2 text-[9px]">
+-                <div className="grid grid-cols-3 gap-1.5"><div className="rounded border border-cyan-500/20 bg-cyan-950/20 p-2"><div className="text-white/45">PROJECTS</div><div className="mt-1 text-cyan-200">{snapshot.activeProjects.length}</div></div><div className="rounded border border-violet-500/20 bg-violet-950/20 p-2"><div className="text-white/45">EXT. AGENTS</div><div className="mt-1 text-violet-200">{snapshot.activeAgents.length}</div></div><div className="rounded border border-amber-500/20 bg-amber-950/20 p-2"><div className="text-white/45">MEMORY</div><div className="mt-1 text-amber-200">{snapshot.memoryAnchorCount}</div></div></div>
+-                <div className="rounded border border-cyan-500/15 bg-white/5 p-2 text-white/55"><div className="text-white/35">PROCEDURAL PROJECT WORLD</div><div className="mt-1">{snapshot.activeProjects.length ? snapshot.activeProjects.join(" · ") : "Nenhum projeto externo conectado ainda. Quando um projeto enviar eventos com o campo project, uma presença espacial nasce automaticamente."}</div></div>
+-                <div className="rounded border border-violet-500/15 bg-white/5 p-2 text-white/55"><div className="text-white/35">AGENT FABRIC</div><div className="mt-1">{snapshot.activeAgents.length ? snapshot.activeAgents.join(" · ") : "Aguardando agentes externos identificados por agentId."}</div></div>
+-                <div className="rounded bg-white/5 p-2 text-white/40">Propostas de novos agentes: {snapshot.agentProposalCount} · aprovações pendentes sinalizadas: {snapshot.pendingApprovalCount} · portais de simulação: {snapshot.simulationCount}.</div>
+-              </div>
+-            ) : null}
++              {tab === "sim" ? (
++                <div className="space-y-2">
++                  <div className="rounded border border-amber-400/25 bg-amber-950/20 p-2 text-amber-100">Harness de desenvolvimento: entra pela mesma Event Fabric, marcado como SIMULADO. Não envia nada para WhatsApp, n8n ou Railway.</div>
++                  <button type="button" data-testid="sofia-sim-full" onClick={() => void fire({ scenario: "full" })} className="w-full rounded border border-cyan-400/40 bg-cyan-950/40 px-2 py-2 font-bold text-cyan-100">▶ Cenário completo: deploy → auditoria → shadow → crítico → recuperação</button>
++                  <div className="grid grid-cols-2 gap-1">
++                    {HARNESS_KINDS.map((kind) => (
++                      <button key={kind} type="button" onClick={() => void fire({ kind })} className="rounded bg-white/5 px-2 py-1.5 text-left text-white/75 hover:bg-white/10">{kind}</button>
++                    ))}
++                    <button type="button" onClick={() => void fire({ kind: "deploy.started", project: "clinica-norte" })} className="rounded bg-white/5 px-2 py-1.5 text-left text-white/75 hover:bg-white/10">deploy · projeto clinica-norte</button>
++                    <button type="button" onClick={() => void fire({ scenario: "reset" })} className="rounded bg-red-500/10 px-2 py-1.5 text-left text-red-200 hover:bg-red-500/20">limpar simulados</button>
++                  </div>
++                  {harnessMessage ? <div className="text-white/50">{harnessMessage}</div> : null}
++                </div>
++              ) : null}
+ 
+-            {tab === "system" ? (
+-              <div className="space-y-1.5 text-[9px]">
+-                <div className="grid grid-cols-2 gap-1.5"><div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2 text-emerald-200">EXTERNAL INGRESS · ON</div><div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2 text-emerald-200">WORLD DIRECTOR · ON</div><div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2 text-emerald-200">RAM REPLAY · ON</div><div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2 text-emerald-200">MULTI-PROJECT FABRIC · READY</div><div className="rounded border border-white/10 bg-white/5 p-2 text-white/50">DEEP HISTORY · OFF</div><div className="rounded border border-white/10 bg-white/5 p-2 text-white/50">GPU FABRIC · OFF</div></div>
+-                <div className="rounded bg-white/5 p-2 text-white/40">Projetos vistos nesta sessão: {snapshot.activeProjects.length ? snapshot.activeProjects.join(", ") : "somente runtime Sofia"}. Simulações registradas: {snapshot.simulationCount}.</div>
+-                <div className="rounded bg-white/5 p-2 text-white/35">Recursos caros permanecem desligados por projeto: {String(!SOFIA_OPS_CAPABILITIES.gpuGeneration && !SOFIA_OPS_CAPABILITIES.deepHistoryPersistence)}.</div>
+-              </div>
+-            ) : null}
++              {tab === "system" ? (
++                <div className="space-y-1.5">
++                  <div className="grid grid-cols-2 gap-1.5">
++                    <div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2 text-emerald-200">WORLD DIRECTOR · ON</div>
++                    <div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2 text-emerald-200">EVENT FABRIC · {view.fabric.lastPollOk ? "OK " + clock(view.fabric.lastPollOk) : "aguardando"}</div>
++                    <div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2 text-emerald-200">REPLAY RAM · {view.replay.total} snapshots</div>
++                    <div className={"rounded border p-2 " + (view.gateway.state === "connected" ? "border-emerald-500/20 bg-emerald-950/20 text-emerald-200" : "border-amber-500/30 bg-amber-950/30 text-amber-200")}>GATEWAY · {view.gateway.state}</div>
++                    <div className="rounded border border-white/10 bg-white/5 p-2 text-white/50">DEEP HISTORY · OFF</div>
++                    <div className="rounded border border-white/10 bg-white/5 p-2 text-white/50">GPU GENERATION · OFF</div>
++                    <div className="rounded border border-white/10 bg-white/5 p-2 text-white/50">LONG SIMULATION · OFF</div>
++                    <div className="rounded border border-white/10 bg-white/5 p-2 text-white/50">XR · OFF</div>
++                  </div>
++                  <div className="rounded bg-white/5 p-2 text-white/40">Eventos na fabric: {view.events.length} · simulados ativos: {world.syntheticActive ? "sim" : "não"} · recursos caros desligados: {String(!SOFIA_OPS_CAPABILITIES.gpuGeneration && !SOFIA_OPS_CAPABILITIES.deepHistoryPersistence)}</div>
++                </div>
++              ) : null}
++            </div>
+           </div>
+-        </div>
+-      ) : null}
++        ) : null}
+ 
+-      <button type="button" onClick={() => setOpen((value) => !value)} className={"rounded-full border px-3 py-2 text-[10px] font-semibold tracking-[0.12em] shadow-xl backdrop-blur-md " + (snapshot.mode === "incident" ? "border-red-400/40 bg-red-950/90 text-red-100" : "border-cyan-400/30 bg-[#071019]/92 text-cyan-100 hover:border-cyan-300/50")}>
+-        SOFIA OPS · {statusText}
+-      </button>
+-    </div>
++        {focus && !open ? (
++          <div data-testid="sofia-focus-chip" className="flex max-w-[min(92vw,360px)] items-center gap-1.5 rounded-full border border-white/15 bg-[#071019]/92 px-2 py-1 text-[9px] text-white/80 shadow-xl backdrop-blur-md">
++            <span className="truncate">▼ {ZONE_LABEL[focus.zone]}{focus.agentId ? " · " + (names.get(focus.agentId) ?? focus.agentId) : ""}</span>
++            {!view.autoFollow ? <button type="button" onClick={() => sofiaWorld.glideToFocus()} className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-cyan-100">ver</button> : null}
++            {focusFloorElsewhere ? <button type="button" onClick={() => onSelectFloor?.(focusFloorElsewhere)} className="rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-100">{FLOOR_LABEL[focusFloorElsewhere]} ↗</button> : null}
++          </div>
++        ) : null}
++
++        <div className="flex items-center gap-1.5">
++          <button
++            type="button"
++            data-testid="sofia-autofollow"
++            onClick={() => sofiaWorld.setAutoFollow(!view.autoFollow)}
++            className={"rounded-full border px-2.5 py-2 text-[10px] font-semibold shadow-xl backdrop-blur-md " + (view.autoFollow ? "border-cyan-400/40 bg-cyan-950/90 text-cyan-100" : "border-white/15 bg-[#071019]/92 text-white/50")}
++          >
++            AUTO {view.autoFollow ? "ON" : "OFF"}
++          </button>
++          <button type="button" data-testid="sofia-ops-toggle" onClick={() => setOpen((value) => !value)} className={"rounded-full border px-3 py-2 text-[10px] font-semibold tracking-[0.12em] shadow-xl backdrop-blur-md " + MODE_CLASS[world.mode]}>
++            <span className={"mr-1.5 inline-block h-1.5 w-1.5 rounded-full " + (view.gateway.state === "connected" ? "bg-emerald-400" : "bg-amber-400")} />
++            SOFIA · {view.replay.active ? "REPLAY" : MODE_LABEL[world.mode]}
++          </button>
++        </div>
++      </div>
++    </>
+   );
+ }
+diff --git a/src/features/sofia-ops/SofiaSpatialLayer.tsx b/src/features/sofia-ops/SofiaSpatialLayer.tsx
+new file mode 100644
+index 0000000..916cd2c
+--- /dev/null
++++ b/src/features/sofia-ops/SofiaSpatialLayer.tsx
+@@ -0,0 +1,615 @@
++"use client";
++
++// Sofia Spatial OS — everything the World State shows inside the 3D office.
++// Reads only the world view (live or replay snapshot); positions come from the
++// authored furniture of the current floor, so each floor reacts in its own rooms.
++// Lights: exactly one ambient + one point light, always mounted (no shader
++// recompiles on mobile); colour/intensity are lerped per frame.
++
++import { useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from "react";
++import { useFrame, useThree } from "@react-three/fiber";
++import { Billboard } from "@react-three/drei";
++import * as THREE from "three";
++import { SofiaSafeText as Text } from "@/features/sofia-ops/SafeText";
++import { toWorld } from "@/features/retro-office/core/geometry";
++import type { FurnitureItem, RenderAgent } from "@/features/retro-office/core/types";
++import { sofiaWorld, type SofiaWorldView } from "@/lib/sofia-ops/worldStore";
++import {
++  FLOOR_LABEL,
++  STATE_LABEL,
++  ZONE_LABEL,
++  type SofiaFloorId,
++  type SpatialState,
++  type WorldState,
++  type ZoneId,
++  type ZoneWorldState,
++} from "@/lib/sofia-ops/worldState";
++
++import {
++  FLOOR_ZONES,
++  PRESET_FLOOR,
++  type Point,
++} from "@/features/sofia-ops/spatialTargets";
++
++export {
++  FLOOR_ZONES,
++  PRESET_FLOOR,
++  resolveSofiaTargets,
++  resolveSofiaWarSeats,
++  resolveSpatialLayout,
++  resolveZoneAnchors,
++  type SofiaTarget,
++  type SofiaTargetSet,
++} from "@/features/sofia-ops/spatialTargets";
++
++export const ZONE_COLOR: Record<ZoneId, string> = {
++  desk: "#22d3ee",
++  infra: "#38bdf8",
++  audit: "#f59e0b",
++  qa: "#facc15",
++  shadow: "#a78bfa",
++  warroom: "#ef4444",
++  intel: "#34d399",
++};
++
++export const STATE_COLOR: Record<SpatialState, string> = {
++  idle: "#64748b",
++  working: "#38bdf8",
++  thinking: "#facc15",
++  auditing: "#f59e0b",
++  meeting: "#ef4444",
++  incident: "#ff2d55",
++  shadow: "#a78bfa",
++};
++
++const FLOOR_PURPOSE: Record<SofiaFloorId, string> = {
++  "openclaw-ground": "atendimento, execução e Shadow Twin",
++  "audit-second": "revisão, workflows n8n e qualidade",
++  "dev-third": "desenvolvimento, testes e regressão",
++  "infra-fourth": "Railway, deploys e disponibilidade",
++  "intel-fifth": "analytics, padrões e comparação",
++  "command-sixth": "incidentes e visão global",
++};
++
++const levelColor = (zone: ZoneId, level: ZoneWorldState["level"]) =>
++  level === "alert" ? "#ff3b4f" : level === "recovering" ? "#34d399" : ZONE_COLOR[zone];
++
++const useSecondTick = (enabled: boolean) => {
++  const [, setTick] = useState(0);
++  useEffect(() => {
++    if (!enabled) return;
++    const timer = window.setInterval(() => setTick((value) => value + 1), 1000);
++    return () => window.clearInterval(timer);
++  }, [enabled]);
++};
++
++const elapsed = (from: number, to: number) => {
++  const seconds = Math.max(0, Math.floor((to - from) / 1000));
++  return String(Math.floor(seconds / 60)).padStart(2, "0") + ":" + String(seconds % 60).padStart(2, "0");
++};
++
++function Label({ text, color, size = 0.2, y = 0 }: { text: string; color: string; size?: number; y?: number }) {
++  return (
++    <Billboard position={[0, y, 0]}>
++      <Text fontSize={size} color={color} anchorX="center" anchorY="bottom" outlineWidth={size * 0.12} outlineColor="#020617" maxWidth={3.2} textAlign="center">
++        {text}
++      </Text>
++    </Billboard>
++  );
++}
++
++function ZoneStation({
++  zone,
++  anchor,
++  state,
++  ownerName,
++  remote,
++}: {
++  zone: ZoneId;
++  anchor: Point;
++  state: ZoneWorldState;
++  ownerName: string | null;
++  remote: boolean;
++}) {
++  const ring = useRef<THREE.Mesh>(null);
++  const pillar = useRef<THREE.Mesh>(null);
++  const active = state.level !== "idle";
++  const color = levelColor(zone, state.level);
++  const [wx, , wz] = toWorld(anchor.x, anchor.y);
++  useFrame(({ clock }) => {
++    const t = clock.elapsedTime;
++    const speed = state.level === "alert" ? 7 : 3;
++    const pulse = active ? 0.5 + 0.5 * Math.sin(t * speed) : 0;
++    if (ring.current) {
++      const material = ring.current.material as THREE.MeshBasicMaterial;
++      material.opacity = active ? 0.45 + pulse * 0.45 : remote ? 0.12 : 0.22;
++      const scale = active ? 1 + pulse * 0.12 : 1;
++      ring.current.scale.set(scale, scale, scale);
++    }
++    if (pillar.current) {
++      const material = pillar.current.material as THREE.MeshBasicMaterial;
++      material.opacity = active ? 0.12 + pulse * 0.16 : 0;
++      pillar.current.visible = active;
++    }
++  });
++  return (
++    <group position={[wx, 0, wz]}>
++      <mesh
++        ref={ring}
++        rotation={[-Math.PI / 2, 0, 0]}
++        position={[0, 0.03, 0]}
++        onClick={(event) => {
++          event.stopPropagation();
++          sofiaWorld.inspect({ kind: "zone", id: zone });
++        }}
++      >
++        <ringGeometry args={[0.42, 0.56, 6]} />
++        <meshBasicMaterial color={color} transparent opacity={0.22} depthWrite={false} side={THREE.DoubleSide} />
++      </mesh>
++      <mesh ref={pillar} position={[0, 0.9, 0]} visible={false}>
++        <cylinderGeometry args={[0.36, 0.48, 1.8, 6, 1, true]} />
++        <meshBasicMaterial color={color} transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
++      </mesh>
++      {active ? (
++        <Label
++          y={2.05}
++          size={0.21}
++          color={color}
++          text={(ZONE_LABEL[zone] + (state.level === "alert" ? " · ALERTA" : state.level === "recovering" ? " · RECUPERANDO" : " · ATIVO")).toUpperCase() + (ownerName ? "\n" + ownerName : "")}
++        />
++      ) : remote ? null : (
++        <Label y={0.1} size={0.13} color="#94a3b8" text={ZONE_LABEL[zone].toUpperCase()} />
++      )}
++    </group>
++  );
++}
++
++function WarRoomBeacon({ anchor, world, names, at }: { anchor: Point; world: WorldState; names: Map<string, string>; at: number | null }) {
++  const incident = world.incident;
++  useSecondTick(Boolean(incident));
++  const beacon = useRef<THREE.Mesh>(null);
++  const recovering = incident?.state === "recuperando";
++  useFrame(({ clock }, delta) => {
++    if (!beacon.current) return;
++    beacon.current.rotation.y += delta * (recovering ? 0.8 : 2.6);
++    beacon.current.position.y = 2.25 + Math.sin(clock.elapsedTime * 2) * 0.06;
++  });
++  if (!incident) return null;
++  const [wx, , wz] = toWorld(anchor.x, anchor.y);
++  const color = recovering ? "#34d399" : "#ff2d55";
++  const people = incident.responsible.map((id) => names.get(id) ?? id).join(", ");
++  return (
++    <group position={[wx, 0, wz]}>
++      <mesh
++        ref={beacon}
++        position={[0, 2.25, 0]}
++        onClick={(event) => {
++          event.stopPropagation();
++          sofiaWorld.inspect({ kind: "incident", id: incident.id });
++        }}
++      >
++        <octahedronGeometry args={[0.2, 0]} />
++        <meshBasicMaterial color={color} wireframe />
++      </mesh>
++      <Label
++        y={2.6}
++        size={0.24}
++        color={color}
++        text={
++          (recovering ? "RECUPERADO · " : "WAR ROOM · ") +
++          incident.type +
++          "\n" +
++          (recovering ? "voltando às atividades" : incident.state + " · " + elapsed(incident.openedAt, at ?? Date.now())) +
++          (people && !recovering ? "\n" + people : "")
++        }
++      />
++    </group>
++  );
++}
++
++function Hologram({ position, color, label, flicker }: { position: [number, number, number]; color: string; label: string; flicker: number }) {
++  const group = useRef<THREE.Group>(null);
++  useFrame(({ clock }) => {
++    if (!group.current) return;
++    const t = clock.elapsedTime + flicker;
++    group.current.position.y = position[1] + Math.sin(t * 1.6) * 0.04;
++    group.current.rotation.y = t * 0.4;
++    group.current.children.forEach((child) => {
++      const mesh = child as THREE.Mesh;
++      const material = mesh.material as THREE.MeshBasicMaterial | undefined;
++      if (material && "opacity" in material) material.opacity = 0.32 + 0.18 * Math.abs(Math.sin(t * 5.3));
++    });
++  });
++  return (
++    <group position={position}>
++      <group ref={group}>
++        <mesh position={[0, 0.45, 0]}>
++          <cylinderGeometry args={[0.14, 0.18, 0.62, 10]} />
++          <meshBasicMaterial color={color} wireframe transparent opacity={0.4} depthWrite={false} />
++        </mesh>
++        <mesh position={[0, 0.9, 0]}>
++          <sphereGeometry args={[0.13, 12, 8]} />
++          <meshBasicMaterial color={color} wireframe transparent opacity={0.4} depthWrite={false} />
++        </mesh>
++      </group>
++      <Label y={1.12} size={0.15} color={color} text={label} />
++    </group>
++  );
++}
++
++function ShadowTwin({ anchor, world }: { anchor: Point; world: WorldState }) {
++  const shadow = world.shadow;
++  const beam = useRef<THREE.Mesh>(null);
++  useFrame(({ clock }) => {
++    if (!beam.current) return;
++    const material = beam.current.material as THREE.MeshBasicMaterial;
++    material.opacity = 0.45 + 0.35 * Math.sin(clock.elapsedTime * 4);
++  });
++  if (!shadow.active) return null;
++  // Twin pair stands just in front of the station so real NPCs keep the booth.
++  const [wx, , wz] = toWorld(anchor.x, anchor.y + 120);
++  const compare = shadow.compare;
++  const verdictColor = compare?.verdict === "match" ? "#34d399" : compare?.verdict === "diverge" ? "#fb923c" : "#e2e8f0";
++  return (
++    <group position={[wx, 0, wz]}>
++      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.025, 0]}>
++        <ringGeometry args={[0.95, 1.0, 48]} />
++        <meshBasicMaterial color="#a78bfa" transparent opacity={0.55} depthWrite={false} side={THREE.DoubleSide} />
++      </mesh>
++      {shadow.candidate ? <Hologram position={[-0.42, 0, 0]} color="#a78bfa" label={"SOFIA · SHADOW"} flicker={0} /> : null}
++      {shadow.human ? <Hologram position={[0.42, 0, 0]} color="#22d3ee" label={"HUMANO · REAL"} flicker={1.7} /> : null}
++      {shadow.candidate && shadow.human ? (
++        <mesh ref={beam} position={[0, 0.7, 0]} rotation={[0, 0, Math.PI / 2]}>
++          <cylinderGeometry args={[0.018, 0.018, 0.84, 6]} />
++          <meshBasicMaterial color={compare ? verdictColor : "#c4b5fd"} transparent opacity={0.6} depthWrite={false} />
++        </mesh>
++      ) : null}
++      <Label
++        y={1.62}
++        size={0.19}
++        color={compare ? verdictColor : "#c4b5fd"}
++        text={
++          compare
++            ? "COMPARAÇÃO · " + (compare.score !== null ? compare.score + "% · " : "") + (compare.verdict === "match" ? "equivalente" : compare.verdict === "diverge" ? "divergente" : "em análise")
++            : shadow.human
++              ? "SHADOW TWIN · aguardando comparação"
++              : "SHADOW TWIN · candidata gerada"
++        }
++      />
++      <Label y={0.06} size={0.11} color="#c4b5fd" text="SHADOW · nada é enviado" />
++    </group>
++  );
++}
++
++function AgentAura({
++  id,
++  state,
++  label,
++  lookupRef,
++}: {
++  id: string;
++  state: SpatialState;
++  label: string;
++  lookupRef: RefObject<Map<string, RenderAgent>>;
++}) {
++  const group = useRef<THREE.Group>(null);
++  const ring = useRef<THREE.Mesh>(null);
++  const color = STATE_COLOR[state];
++  useFrame(({ clock }) => {
++    const agent = lookupRef.current?.get(id);
++    if (!group.current) return;
++    if (!agent) {
++      group.current.visible = false;
++      return;
++    }
++    const [x, , z] = toWorld(agent.x, agent.y);
++    group.current.visible = true;
++    group.current.position.set(x, 0, z);
++    if (ring.current) {
++      const fast = state === "incident" || state === "meeting";
++      const pulse = 0.5 + 0.5 * Math.sin(clock.elapsedTime * (fast ? 6 : 3) + x);
++      ring.current.scale.setScalar(1 + pulse * 0.18);
++      (ring.current.material as THREE.MeshBasicMaterial).opacity = 0.5 + pulse * 0.4;
++    }
++  });
++  return (
++    <group ref={group} visible={false}>
++      <mesh ref={ring} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.035, 0]}>
++        <ringGeometry args={[0.2, 0.28, 28]} />
++        <meshBasicMaterial color={color} transparent opacity={0.8} depthWrite={false} side={THREE.DoubleSide} />
++      </mesh>
++      <Label y={2.22} size={0.17} color={color} text={label} />
++    </group>
++  );
++}
++
++function ProjectTowers({ world }: { world: WorldState }) {
++  const groups = useRef<(THREE.Mesh | null)[]>([]);
++  useFrame(({ clock }) => {
++    groups.current.forEach((mesh, index) => {
++      const project = world.projects[index];
++      if (!mesh || !project) return;
++      const material = mesh.material as THREE.MeshBasicMaterial;
++      material.opacity = project.incident ? 0.35 + 0.3 * Math.abs(Math.sin(clock.elapsedTime * 5)) : project.recentCount ? 0.42 : 0.26;
++    });
++  });
++  // Campus row just south of the office wall; Sofia (this building) first.
++  const count = world.projects.length;
++  if (count === 0) return null;
++  return (
++    <group>
++      {world.projects.map((project, index) => {
++        const x = 900 + (index - (count - 1) / 2) * 190;
++        const [wx, , wz] = toWorld(x, 812);
++        const height = 0.5 + Math.min(1.5, project.recentCount * 0.14 + project.eventCount * 0.01);
++        const color = project.incident ? "#ff2d55" : project.health >= 80 ? "#22d3ee" : project.health >= 50 ? "#f59e0b" : "#ef4444";
++        return (
++          <group
++            key={project.id}
++            position={[wx, 0, wz]}
++            onClick={(event) => {
++              event.stopPropagation();
++              sofiaWorld.inspect({ kind: "project", id: project.id });
++            }}
++          >
++            <mesh ref={(mesh) => { groups.current[index] = mesh; }} position={[0, height / 2, 0]}>
++              <boxGeometry args={[0.55, height, 0.55]} />
++              <meshBasicMaterial color={color} transparent opacity={0.3} depthWrite={false} />
++            </mesh>
++            <mesh position={[0, height / 2, 0]}>
++              <boxGeometry args={[0.56, height, 0.56]} />
++              <meshBasicMaterial color={color} wireframe />
++            </mesh>
++            <Label y={height + 0.1} size={0.17} color={color} text={(project.home ? project.label.toUpperCase() + " · este prédio" : project.label.toUpperCase()) + "\n" + project.health + "%"} />
++          </group>
++        );
++      })}
++    </group>
++  );
++}
++
++function FocusMarker({ world, anchors, lookupRef }: { world: WorldState; anchors: Record<ZoneId, Point | null>; lookupRef: RefObject<Map<string, RenderAgent>> }) {
++  const cone = useRef<THREE.Mesh>(null);
++  const focus = world.focus;
++  useFrame(({ clock }) => {
++    if (!cone.current) return;
++    if (!focus) {
++      cone.current.visible = false;
++      return;
++    }
++    const agent = focus.agentId ? lookupRef.current?.get(focus.agentId) : undefined;
++    const point = agent ? { x: agent.x, y: agent.y } : anchors[focus.zone];
++    if (!point) {
++      cone.current.visible = false;
++      return;
++    }
++    const [x, , z] = toWorld(point.x, point.y);
++    cone.current.visible = true;
++    cone.current.position.set(x, 1.75 + Math.sin(clock.elapsedTime * 3) * 0.08, z);
++    cone.current.rotation.y += 0.03;
++  });
++  const color = focus?.priority === 3 ? "#ff2d55" : focus?.priority === 2 ? "#f59e0b" : "#22d3ee";
++  return (
++    <mesh ref={cone} visible={false} rotation={[Math.PI, 0, 0]}>
++      <coneGeometry args={[0.1, 0.22, 4]} />
++      <meshBasicMaterial color={color} />
++    </mesh>
++  );
++}
++
++function FloorBoard({ floorId, world }: { floorId: SofiaFloorId; world: WorldState }) {
++  const zones = FLOOR_ZONES[floorId];
++  const activeHere = zones.filter((zone) => world.zones[zone].level !== "idle");
++  const elsewhere = (Object.keys(world.floorActivity) as SofiaFloorId[]).filter((floor) => floor !== floorId && world.floorActivity[floor].hot);
++  const [wx, , wz] = toWorld(900, 70);
++  const text =
++    FLOOR_LABEL[floorId].toUpperCase() +
++    " · " +
++    FLOOR_PURPOSE[floorId] +
++    "\n" +
++    (activeHere.length ? "ativo: " + activeHere.map((zone) => ZONE_LABEL[zone]).join(", ") : "sem atividade neste andar") +
++    (elsewhere.length ? "\natividade em: " + elsewhere.map((floor) => FLOOR_LABEL[floor]).join(", ") : "");
++  return (
++    <group position={[wx, 0, wz]}>
++      <Label y={2.2} size={0.21} color={activeHere.length ? "#e2e8f0" : "#94a3b8"} text={text} />
++    </group>
++  );
++}
++
++// Camera follows the World Director focus gently: glides on a new focus, then
++// only re-centres when the subject drifts out of a dead zone. Any user touch
++// pauses it for 12 s. Disabled while the third-person follow cam is active.
++function AutoFollowCamera({
++  view,
++  anchors,
++  orbitRef,
++  lookupRef,
++  followRef,
++}: {
++  view: SofiaWorldView;
++  anchors: Record<ZoneId, Point | null>;
++  orbitRef: MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>;
++  lookupRef: RefObject<Map<string, RenderAgent>>;
++  followRef?: MutableRefObject<string | null>;
++}) {
++  const { gl, camera } = useThree();
++  const lastUserRef = useRef(0);
++  const glidingRef = useRef(false);
++  const focusKeyRef = useRef<string | null>(null);
++  const glideRequestRef = useRef(view.glideRequest);
++  const desired = useMemo(() => new THREE.Vector3(), []);
++  const offset = useMemo(() => new THREE.Vector3(), []);
++  useEffect(() => {
++    const element = gl.domElement;
++    const mark = () => {
++      lastUserRef.current = performance.now();
++      glidingRef.current = false;
++    };
++    element.addEventListener("pointerdown", mark);
++    element.addEventListener("wheel", mark, { passive: true });
++    element.addEventListener("touchstart", mark, { passive: true });
++    return () => {
++      element.removeEventListener("pointerdown", mark);
++      element.removeEventListener("wheel", mark);
++      element.removeEventListener("touchstart", mark);
++    };
++  }, [gl]);
++  const focus = view.world.focus;
++  const key = focus ? focus.eventId + ":" + (focus.agentId ?? "") : null;
++  useEffect(() => {
++    if (key === focusKeyRef.current) return;
++    focusKeyRef.current = key;
++    if (key) glidingRef.current = true;
++  }, [key]);
++  useEffect(() => {
++    if (view.glideRequest === glideRequestRef.current) return;
++    glideRequestRef.current = view.glideRequest;
++    glidingRef.current = true;
++    lastUserRef.current = 0;
++  }, [view.glideRequest]);
++  useFrame((_, delta) => {
++    const controls = orbitRef.current;
++    if (!controls || !focus || followRef?.current) return;
++    const manual = !view.autoFollow;
++    if (manual && !glidingRef.current) return;
++    if (!manual && performance.now() - lastUserRef.current < 12000) return;
++    const agent = focus.agentId ? lookupRef.current?.get(focus.agentId) : undefined;
++    const point = agent ? { x: agent.x, y: agent.y } : anchors[focus.zone];
++    if (!point) return;
++    const [x, , z] = toWorld(point.x, point.y);
++    desired.set(x, controls.target.y, z);
++    const distance = controls.target.distanceTo(desired);
++    if (!glidingRef.current && distance < 2.2) return;
++    glidingRef.current = distance > 0.08;
++    const step = 1 - Math.exp(-Math.min(delta, 0.1) * 2.4);
++    offset.copy(desired).sub(controls.target).multiplyScalar(step);
++    controls.target.add(offset);
++    camera.position.add(offset);
++    controls.update();
++  });
++  return null;
++}
++
++function AlertLighting({ world, replay }: { world: WorldState; replay: boolean }) {
++  const ambient = useRef<THREE.AmbientLight>(null);
++  const point = useRef<THREE.PointLight>(null);
++  const targetColor = useMemo(() => new THREE.Color(), []);
++  const pointColor = useMemo(() => new THREE.Color(), []);
++  useFrame(({ clock }, delta) => {
++    const k = 1 - Math.exp(-Math.min(delta, 0.1) * 1.8);
++    const alert = world.alertLevel;
++    const mode = world.mode;
++    if (ambient.current) {
++      targetColor.set(replay ? "#e8dcc4" : mode === "incident" ? "#ffd0d5" : mode === "recovery" ? "#d5f5e3" : mode === "shadow" ? "#ddd6fe" : "#d8d4c8");
++      ambient.current.color.lerp(targetColor, k);
++      const intensity = replay ? 0.62 : 0.72 - alert * 0.16;
++      ambient.current.intensity += (intensity - ambient.current.intensity) * k;
++    }
++    if (point.current) {
++      pointColor.set(mode === "incident" ? "#ff334d" : mode === "recovery" ? "#34d399" : mode === "audit" ? "#f59e0b" : mode === "deploy" ? "#38bdf8" : mode === "shadow" ? "#a78bfa" : "#ffffff");
++      point.current.color.lerp(pointColor, k);
++      const pulse = mode === "incident" ? 0.75 + 0.25 * Math.sin(clock.elapsedTime * 5) : 1;
++      const intensity = mode === "incident" ? 5.5 * pulse : mode === "recovery" ? 3.2 * alert : mode === "nominal" || mode === "working" ? 0 : 1.6;
++      point.current.intensity += (intensity - point.current.intensity) * k;
++    }
++  });
++  return (
++    <>
++      <ambientLight ref={ambient} intensity={0.72} color="#d8d4c8" />
++      <pointLight ref={point} position={[0, 4.2, -9.5]} intensity={0} distance={22} decay={1.4} color="#ffffff" />
++    </>
++  );
++}
++
++
++// Observability: a throttled, read-only snapshot of where agents physically are
++// (used by E2E and the inspector); no React state, ~2 writes per second.
++function SpatialProbe({ lookupRef, orbitRef }: { lookupRef: RefObject<Map<string, RenderAgent>>; orbitRef: MutableRefObject<{ target: THREE.Vector3; update: () => void } | null> }) {
++  const lastRef = useRef(0);
++  useFrame(() => {
++    const now = performance.now();
++    if (now - lastRef.current < 500) return;
++    lastRef.current = now;
++    const out: Record<string, { x: number; y: number; tx: number; ty: number; state: string; target: string | null; pose: string | null; path: number }> = {};
++    lookupRef.current?.forEach((agent, id) => {
++      out[id] = {
++        x: Math.round(agent.x),
++        y: Math.round(agent.y),
++        tx: Math.round(agent.targetX),
++        ty: Math.round(agent.targetY),
++        state: agent.state,
++        target: agent.interactionTarget ?? null,
++        pose: agent.sofiaPose ?? null,
++        path: agent.path?.length ?? 0,
++      };
++    });
++    const holder = window as Window & { __SOFIA_AGENT_POS?: typeof out; __SOFIA_CAMERA_TARGET?: number[] };
++    holder.__SOFIA_AGENT_POS = out;
++    const target = orbitRef.current?.target;
++    if (target) holder.__SOFIA_CAMERA_TARGET = [target.x, target.y, target.z];
++  });
++  return null;
++}
++
++export function SofiaSpatialLayer({
++  view,
++  layoutPreset,
++  anchors,
++  agentLookupRef,
++  orbitRef,
++  followRef,
++  agentNames,
++}: {
++  view: SofiaWorldView;
++  layoutPreset: string;
++  anchors: Record<ZoneId, Point | null> | null;
++  agentLookupRef: RefObject<Map<string, RenderAgent>>;
++  orbitRef: MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>;
++  followRef?: MutableRefObject<string | null>;
++  agentNames: Map<string, string>;
++}) {
++  const world = view.world;
++  const floorId = PRESET_FLOOR[layoutPreset] ?? null;
++  const ownZones = floorId ? FLOOR_ZONES[floorId] : [];
++  const activeAgents = Object.entries(world.agents).filter(([, agent]) => agent.state !== "idle");
++  return (
++    <>
++      <AlertLighting world={world} replay={view.replay.active} />
++      <SpatialProbe lookupRef={agentLookupRef} orbitRef={orbitRef} />
++      {floorId && anchors ? (
++        <>
++          {(Object.keys(anchors) as ZoneId[]).map((zone) => {
++            const anchor = anchors[zone];
++            if (!anchor || zone === "desk") return null;
++            const state = world.zones[zone];
++            return (
++              <ZoneStation
++                key={zone}
++                zone={zone}
++                anchor={anchor}
++                state={state}
++                ownerName={state.owner ? agentNames.get(state.owner) ?? state.owner : null}
++                remote={!ownZones.includes(zone)}
++              />
++            );
++          })}
++          {anchors.warroom ? <WarRoomBeacon anchor={anchors.warroom} world={world} names={agentNames} at={view.replay.at} /> : null}
++          {anchors.shadow ? <ShadowTwin anchor={anchors.shadow} world={world} /> : null}
++          {activeAgents.map(([id, agent]) => (
++            <AgentAura
++              key={id}
++              id={id}
++              state={agent.state}
++              lookupRef={agentLookupRef}
++              label={STATE_LABEL[agent.state].toUpperCase() + (agent.substituteFor ? " · substituto" : "")}
++            />
++          ))}
++          <FocusMarker world={world} anchors={anchors} lookupRef={agentLookupRef} />
++          <FloorBoard floorId={floorId} world={world} />
++          <ProjectTowers world={world} />
++          <AutoFollowCamera view={view} anchors={anchors} orbitRef={orbitRef} lookupRef={agentLookupRef} followRef={followRef} />
++        </>
++      ) : null}
++    </>
++  );
++}
+diff --git a/src/features/sofia-ops/spatialTargets.ts b/src/features/sofia-ops/spatialTargets.ts
+new file mode 100644
+index 0000000..787b574
+--- /dev/null
++++ b/src/features/sofia-ops/spatialTargets.ts
+@@ -0,0 +1,302 @@
++// Sofia Spatial OS — pure spatial resolution (no React/three): where each World
++// State zone physically lives on the current floor, War Room seats, and the
++// per-agent destinations consumed by the scene's walk system.
++
++import { ITEM_FOOTPRINT, resolveItemTypeKey } from "@/features/retro-office/core/geometry";
++import { astar, buildNavGrid, type NavGrid } from "@/features/retro-office/core/navigation";
++import type { FurnitureItem } from "@/features/retro-office/core/types";
++import type { SofiaFloorId, ZoneId } from "@/lib/sofia-ops/worldState";
++
++export type Point = { x: number; y: number };
++export type Seat = Point & { facing: number };
++
++export const PRESET_FLOOR: Record<string, SofiaFloorId | null> = {
++  office: "openclaw-ground",
++  audit: "audit-second",
++  dev: "dev-third",
++  infra: "infra-fourth",
++  intel: "intel-fifth",
++  command: "command-sixth",
++  lobby: null,
++};
++
++// Which zones are this floor's own function (others render as remote hints).
++export const FLOOR_ZONES: Record<SofiaFloorId, ZoneId[]> = {
++  "openclaw-ground": ["infra", "audit", "qa", "shadow", "warroom"],
++  "audit-second": ["audit", "qa", "warroom"],
++  "dev-third": ["qa", "audit"],
++  "infra-fourth": ["infra", "warroom"],
++  "intel-fifth": ["intel", "shadow"],
++  "command-sixth": ["warroom", "infra", "audit", "shadow"],
++};
++
++
++export const itemCenter = (item: FurnitureItem): Point => {
++  const [fw, fh] = ITEM_FOOTPRINT[resolveItemTypeKey(item)] ?? [40, 40];
++  if (typeof item.r === "number") return { x: item.x + item.r, y: item.y + item.r };
++  return { x: item.x + (item.w ?? fw) / 2, y: item.y + (item.h ?? fh) / 2 };
++};
++
++const firstOf = (furniture: FurnitureItem[], types: string[]) => {
++  for (const type of types) {
++    const found = furniture.find((item) => item.type === type);
++    if (found) return found;
++  }
++  return null;
++};
++
++const biggestRoundTable = (furniture: FurnitureItem[]) =>
++  furniture
++    .filter((item) => item.type === "round_table")
++    .sort((a, b) => (b.r ?? 0) - (a.r ?? 0))[0] ?? null;
++
++// Seats for the War Room: the authored meeting room when the floor has one,
++// else the chairs around the floor's biggest round table, else a ring around it.
++export const resolveSofiaWarSeats = (furniture: FurnitureItem[], meetingSeats: Seat[]): Seat[] => {
++  if (meetingSeats.length >= 3) return meetingSeats;
++  const table = biggestRoundTable(furniture);
++  if (!table) return meetingSeats;
++  const center = itemCenter(table);
++  const radius = table.r ?? 60;
++  const faceTable = (x: number, y: number) => Math.atan2(center.x - x, center.y - y);
++  const chairs = furniture
++    .filter((item) => item.type === "chair")
++    .map((item) => itemCenter(item))
++    .filter((point) => Math.hypot(point.x - center.x, point.y - center.y) <= radius + 70)
++    .sort((a, b) => Math.atan2(a.y - center.y, a.x - center.x) - Math.atan2(b.y - center.y, b.x - center.x));
++  if (chairs.length >= 3) return chairs.map((point) => ({ ...point, facing: faceTable(point.x, point.y) }));
++  return Array.from({ length: 6 }, (_, index) => {
++    const angle = (index / 6) * Math.PI * 2;
++    const x = center.x + Math.cos(angle) * (radius + 30);
++    const y = center.y + Math.sin(angle) * (radius + 30);
++    return { x, y, facing: faceTable(x, y) };
++  });
++};
++
++// Physical anchor of every zone on the current floor (null = not on this floor).
++// Always derived from the floor's own furniture, so custom layouts (Sofia's
++// first floor moved the server room) are honoured.
++export const resolveZoneAnchors = (
++  furniture: FurnitureItem[],
++  floorId: SofiaFloorId,
++  warSeats: Seat[],
++): Record<ZoneId, Point | null> => {
++  const server = firstOf(furniture, ["server_terminal", "server_rack"]);
++  const qa = firstOf(furniture, ["qa_terminal", "device_rack"]);
++  const bench = firstOf(furniture, ["test_bench", "device_rack", "qa_terminal"]);
++  const booth = firstOf(furniture, ["sms_booth", "phone_booth"]);
++  const board = firstOf(furniture, ["whiteboard", "kanban_board"]);
++  const warCenter = warSeats.length
++    ? { x: warSeats.reduce((sum, seat) => sum + seat.x, 0) / warSeats.length, y: warSeats.reduce((sum, seat) => sum + seat.y, 0) / warSeats.length }
++    : null;
++  const qaAnchor = qa ? itemCenter(qa) : null;
++  const benchAnchor = bench ? itemCenter(bench) : null;
++  return {
++    desk: null,
++    infra: server ? itemCenter(server) : null,
++    audit: qaAnchor,
++    qa: benchAnchor && qaAnchor && Math.hypot(benchAnchor.x - qaAnchor.x, benchAnchor.y - qaAnchor.y) > 60 ? benchAnchor : qaAnchor ? { x: qaAnchor.x + 20, y: qaAnchor.y + 110 } : null,
++    shadow: booth ? itemCenter(booth) : floorId === "intel-fifth" && board ? { x: itemCenter(board).x - 120, y: itemCenter(board).y + 140 } : null,
++    warroom: warCenter,
++    intel: floorId === "intel-fifth" ? (board ? itemCenter(board) : { x: 1290, y: 300 }) : null,
++  };
++};
++
++export type SofiaTarget = { x: number; y: number; facing: number; pose: "stand" | "sit" };
++export type SofiaTargetSet = { targets: Record<string, SofiaTarget>; deskHolds: Record<string, boolean> };
++
++// World zones -> physical destinations on this floor. Stations: stand next to
++// the anchor item (A* snaps to the nearest walkable cell) facing it. War Room:
++// one seat per participant in stable order. Desk/intel work uses the agent's
++// assigned desk; zones missing on this floor fall back to desk work.
++export const resolveSofiaTargets = (
++  zoneByAgentId: Record<string, ZoneId>,
++  anchors: Record<ZoneId, Point | null>,
++  warSeats: Seat[],
++  stands?: Record<ZoneId, Point | null>,
++): SofiaTargetSet => {
++  const targets: Record<string, SofiaTarget> = {};
++  const deskHolds: Record<string, boolean> = {};
++  const warOrder = Object.keys(zoneByAgentId).filter((id) => zoneByAgentId[id] === "warroom").sort();
++  for (const [agentId, zone] of Object.entries(zoneByAgentId)) {
++    if (zone === "warroom") {
++      const seat = warSeats.length ? warSeats[warOrder.indexOf(agentId) % warSeats.length] : null;
++      if (seat) targets[agentId] = { x: seat.x, y: seat.y, facing: seat.facing, pose: "sit" };
++      else deskHolds[agentId] = true;
++      continue;
++    }
++    const anchor = zone === "desk" || zone === "intel" ? null : anchors[zone];
++    if (!anchor) {
++      deskHolds[agentId] = true;
++      continue;
++    }
++    // Stand at the validated walkable point (default: just south of the station), facing it.
++    const stand = stands?.[zone] ?? { x: anchor.x, y: anchor.y + 42 };
++    targets[agentId] = { x: stand.x, y: stand.y, facing: Math.atan2(anchor.x - stand.x, anchor.y - stand.y), pose: "stand" };
++  }
++  return { targets, deskHolds };
++};
++
++
++// ---------------------------------------------------------------------------
++// Reachability. Custom layouts can seal rooms on the 25px nav grid (Sofia's
++// first floor: the QA lab only opens onto a sealed corridor). Every station and
++// War Room seat is validated with the scene's own A*; unreachable ones move to
++// the nearest reachable point so agents never "arrive" without walking.
++// ---------------------------------------------------------------------------
++
++const HUB_CANDIDATES: Point[] = [
++  { x: 900, y: 400 },
++  { x: 700, y: 330 },
++  { x: 1000, y: 520 },
++];
++
++const resolveHub = (grid: NavGrid): Point => {
++  for (const hub of HUB_CANDIDATES) {
++    const probe = astar(hub.x, hub.y, hub.x + 50, hub.y, grid);
++    if (probe.length) return hub;
++  }
++  return HUB_CANDIDATES[0];
++};
++
++const isReachable = (grid: NavGrid, hub: Point, point: Point) => {
++  const path = astar(hub.x, hub.y, point.x, point.y, grid);
++  if (!path.length) return false;
++  const last = path[path.length - 1];
++  return Math.hypot(last.x - point.x, last.y - point.y) < 40;
++};
++
++export const nearestReachable = (grid: NavGrid, hub: Point, point: Point, maxRadius = 440): Point | null => {
++  if (isReachable(grid, hub, point)) return point;
++  for (let radius = 40; radius <= maxRadius; radius += 40) {
++    let best: Point | null = null;
++    let bestScore = Infinity;
++    for (let k = 0; k < 12; k += 1) {
++      const angle = (k / 12) * Math.PI * 2;
++      const candidate = { x: Math.round(point.x + Math.cos(angle) * radius), y: Math.round(point.y + Math.sin(angle) * radius) };
++      if (candidate.x < 20 || candidate.x > 1780 || candidate.y < 20 || candidate.y > 700) continue;
++      // Prefer candidates toward the hub (outside the sealed room's door side).
++      const score = Math.hypot(candidate.x - hub.x, candidate.y - hub.y);
++      if (score < bestScore && isReachable(grid, hub, candidate)) {
++        best = candidate;
++        bestScore = score;
++      }
++    }
++    if (best) return best;
++  }
++  return null;
++};
++
++export type SpatialLayout = {
++  // Visual centre of each zone's station (the furniture it belongs to).
++  anchors: Record<ZoneId, Point | null>;
++  // Walkable point where the responsible agent stands (validated with A*).
++  stands: Record<ZoneId, Point | null>;
++  warSeats: Seat[];
++  relocated: ZoneId[];
++};
++
++// Own room first; semantic fallbacks when that room is sealed on this floor
++// (audit work moves to the review boards, QA to the lounge table, …).
++const ZONE_ITEMS: Record<"infra" | "audit" | "qa" | "shadow", string[][]> = {
++  infra: [["server_terminal", "server_rack"], ["kanban_board", "whiteboard", "table_rect"]],
++  audit: [["qa_terminal", "device_rack"], ["whiteboard", "kanban_board", "table_rect"]],
++  qa: [["test_bench", "device_rack", "qa_terminal"], ["whiteboard", "table_rect", "kanban_board"]],
++  shadow: [["sms_booth", "phone_booth"], ["table_rect", "kanban_board", "whiteboard"]],
++};
++
++// Try the four sides of an item (south first: rooms open toward the floor).
++const standCandidates = (item: FurnitureItem): Point[] => {
++  const center = itemCenter(item);
++  const [fw, fh] = ITEM_FOOTPRINT[resolveItemTypeKey(item)] ?? [40, 40];
++  const halfW = (item.w ?? fw) / 2;
++  const halfH = (item.h ?? fh) / 2;
++  return [
++    { x: center.x, y: center.y + halfH + 28 },
++    { x: center.x - halfW - 28, y: center.y },
++    { x: center.x + halfW + 28, y: center.y },
++    { x: center.x, y: center.y - halfH - 28 },
++  ];
++};
++
++const reachableItem = (furniture: FurnitureItem[], grid: NavGrid, hub: Point, types: string[], used: Set<string>) => {
++  for (const type of types) {
++    for (const item of furniture) {
++      if (item.type !== type || used.has(item._uid)) continue;
++      const stand = standCandidates(item).find((point) => isReachable(grid, hub, point));
++      if (stand) return { item, stand };
++    }
++  }
++  return null;
++};
++
++const arcSeats = (focus: Point, grid: NavGrid, hub: Point): Seat[] => {
++  const center = { x: focus.x, y: focus.y + 95 };
++  const seats: Seat[] = [];
++  for (let index = 0; index < 7 && seats.length < 6; index += 1) {
++    const angle = (-70 + index * (140 / 6)) * (Math.PI / 180);
++    const x = Math.round(center.x + Math.sin(angle) * 70);
++    const y = Math.round(center.y + Math.cos(angle) * 35);
++    if (isReachable(grid, hub, { x, y })) seats.push({ x, y, facing: Math.atan2(focus.x - x, focus.y - y) });
++  }
++  return seats;
++};
++
++export const resolveSpatialLayout = (
++  furniture: FurnitureItem[],
++  floorId: SofiaFloorId,
++  meetingSeats: Seat[],
++): SpatialLayout => {
++  const grid = buildNavGrid(furniture);
++  const hub = resolveHub(grid);
++  const relocated: ZoneId[] = [];
++  const raw = resolveZoneAnchors(furniture, floorId, []);
++  const anchors: Record<ZoneId, Point | null> = { ...raw, warroom: null };
++  const stands: Record<ZoneId, Point | null> = { desk: null, infra: null, audit: null, qa: null, shadow: null, warroom: null, intel: null };
++  const used = new Set<string>();
++
++  // War Room first: the authored meeting seats / round-table chairs, else an
++  // arc in front of the kanban board (the most visible free wall).
++  const rawSeats = resolveSofiaWarSeats(furniture, meetingSeats);
++  let warSeats = rawSeats.filter((seat) => isReachable(grid, hub, seat));
++  if (warSeats.length < 3) {
++    if (rawSeats.length) relocated.push("warroom");
++    const board = furniture.find((item) => item.type === "kanban_board" && standCandidates(item).some((point) => isReachable(grid, hub, point)))
++      ?? furniture.find((item) => item.type === "whiteboard" && standCandidates(item).some((point) => isReachable(grid, hub, point)));
++    if (board) {
++      used.add(board._uid);
++      warSeats = arcSeats(itemCenter(board), grid, hub);
++    }
++  }
++  if (warSeats.length) {
++    anchors.warroom = {
++      x: warSeats.reduce((sum, seat) => sum + seat.x, 0) / warSeats.length,
++      y: warSeats.reduce((sum, seat) => sum + seat.y, 0) / warSeats.length,
++    };
++    stands.warroom = anchors.warroom;
++  }
++
++  for (const zone of ["infra", "audit", "qa", "shadow"] as const) {
++    if (!raw[zone]) continue;
++    const [own, fallback] = ZONE_ITEMS[zone];
++    const found = reachableItem(furniture, grid, hub, own, used);
++    if (found) {
++      anchors[zone] = itemCenter(found.item);
++      stands[zone] = found.stand;
++      used.add(found.item._uid);
++      continue;
++    }
++    relocated.push(zone);
++    const alternative = reachableItem(furniture, grid, hub, fallback, used);
++    if (alternative) {
++      anchors[zone] = itemCenter(alternative.item);
++      stands[zone] = alternative.stand;
++      used.add(alternative.item._uid);
++      continue;
++    }
++    const near = nearestReachable(grid, hub, raw[zone]!);
++    anchors[zone] = near;
++    stands[zone] = near;
++  }
++  return { anchors, stands, warSeats, relocated };
++};
+diff --git a/src/lib/sofia-ops/config.ts b/src/lib/sofia-ops/config.ts
+index d5ba026..8002fa0 100644
+--- a/src/lib/sofia-ops/config.ts
++++ b/src/lib/sofia-ops/config.ts
+@@ -1,4 +1,4 @@
+-export const SOFIA_OPS_VERSION = "2.7.0-max";
++export const SOFIA_OPS_VERSION = "2.8.0-spatial";
+ 
+ export const SOFIA_OPS_CAPABILITIES = {
+   digitalTwin: true,
+diff --git a/src/lib/sofia-ops/eventBus.ts b/src/lib/sofia-ops/eventBus.ts
+index e5722be..6e8bdf6 100644
+--- a/src/lib/sofia-ops/eventBus.ts
++++ b/src/lib/sofia-ops/eventBus.ts
+@@ -1,3 +1,8 @@
++// Sofia Event Fabric — runtime side.
++// Real OpenClaw gateway frames are reduced to structural facts (which agent,
++// which run, which phase, which tool). Message content is never stored here:
++// the Sofia runtime carries patient conversations.
++
+ export type SofiaOpsSeverity = "info" | "success" | "warning" | "critical";
+ export type SofiaOpsSource = "openclaw" | "n8n" | "railway" | "whatsapp" | "github" | "system";
+ 
+@@ -9,58 +14,103 @@ export type SofiaOpsEvent = {
+   severity: SofiaOpsSeverity;
+   summary: string;
+   payloadText: string;
++  agentId?: string | null;
++  runId?: string | null;
++  project?: string | null;
+ };
+ 
+ const MAX_EVENTS = 240;
+ let sequence = 0;
+ let ring: SofiaOpsEvent[] = [];
+ const listeners = new Set<() => void>();
++const lastToolByAgent = new Map<string, { key: string; ts: number }>();
++const startedRuns = new Set<string>();
+ 
+-const safeText = (value: unknown) => {
+-  try {
+-    const raw = typeof value === "string" ? value : JSON.stringify(value);
+-    return (raw || "").slice(0, 800);
+-  } catch {
+-    return String(value ?? "").slice(0, 800);
+-  }
+-};
+-
+-const resolveSource = (haystack: string): SofiaOpsSource => {
+-  if (haystack.includes("railway")) return "railway";
+-  if (haystack.includes("n8n")) return "n8n";
+-  if (haystack.includes("whatsapp") || haystack.includes("evolution")) return "whatsapp";
+-  if (haystack.includes("github") || haystack.includes("git.")) return "github";
+-  return "openclaw";
+-};
++const IGNORED = new Set(["tick", "health", "presence", "heartbeat", "connect.challenge", "talk.mode", "voicewake.changed"]);
+ 
+-const resolveSeverity = (haystack: string): SofiaOpsSeverity => {
+-  if (/crash|fatal|failed|failure|error|timeout|disconnect|denied/.test(haystack)) return "critical";
+-  if (/warn|retry|degraded|slow|backoff/.test(haystack)) return "warning";
+-  if (/success|complete|completed|connected|ready|done/.test(haystack)) return "success";
+-  return "info";
++const agentFromSessionKey = (value: unknown): string | null => {
++  if (typeof value !== "string") return null;
++  const match = /^agent:([^:]+):/.exec(value.trim());
++  return match ? match[1] : null;
+ };
+ 
+-export const ingestSofiaOpsRuntimeEvent = (raw: unknown): SofiaOpsEvent => {
+-  const candidate = raw as { event?: unknown; type?: unknown; payload?: unknown } | null;
+-  const type = typeof candidate?.event === "string"
+-    ? candidate.event
+-    : typeof candidate?.type === "string"
+-      ? candidate.type
+-      : "runtime.event";
+-  const payloadText = safeText(candidate?.payload ?? raw);
+-  const haystack = (type + " " + payloadText).toLowerCase();
+-  const event: SofiaOpsEvent = {
++const record = (event: Omit<SofiaOpsEvent, "id" | "ts">) => {
++  const full: SofiaOpsEvent = {
++    ...event,
+     id: "ops-" + Date.now().toString(36) + "-" + (++sequence).toString(36),
+     ts: Date.now(),
+-    type,
+-    source: resolveSource(haystack),
+-    severity: resolveSeverity(haystack),
+-    summary: payloadText ? payloadText.slice(0, 160) : type,
+-    payloadText,
+   };
+-  ring = [event, ...ring].slice(0, MAX_EVENTS);
++  ring = [full, ...ring].slice(0, MAX_EVENTS);
+   listeners.forEach((listener) => listener());
+-  return event;
++  return full;
++};
++
++export const ingestSofiaOpsRuntimeEvent = (raw: unknown): SofiaOpsEvent | null => {
++  const frame = raw as { event?: unknown; type?: unknown; payload?: unknown } | null;
++  const name = typeof frame?.event === "string" ? frame.event : typeof frame?.type === "string" ? frame.type : "";
++  if (!name || IGNORED.has(name)) return null;
++  const payload = (frame?.payload && typeof frame.payload === "object" ? frame.payload : {}) as Record<string, unknown>;
++  const agentId = agentFromSessionKey(payload.sessionKey) ?? (typeof payload.agentId === "string" ? payload.agentId : null);
++  const runId = typeof payload.runId === "string" ? payload.runId : null;
++  const base = { source: "openclaw" as const, agentId, runId };
++
++  if (name === "agent") {
++    const stream = typeof payload.stream === "string" ? payload.stream : "";
++    const data = (payload.data && typeof payload.data === "object" ? payload.data : {}) as Record<string, unknown>;
++    const phase = typeof data.phase === "string" ? data.phase : "";
++    if (stream === "lifecycle" && phase === "start") {
++      if (runId) startedRuns.add(runId);
++      return record({ ...base, type: "agent.run.start", severity: "info", summary: "run iniciado", payloadText: "lifecycle:start" });
++    }
++    if (stream === "lifecycle" && (phase === "end" || phase === "error")) {
++      if (runId) startedRuns.delete(runId);
++      const failed = phase === "error";
++      return record({
++        ...base,
++        type: failed ? "agent.run.error" : "agent.run.end",
++        severity: failed ? "warning" : "success",
++        summary: failed ? "run terminou com erro" : "run concluído",
++        payloadText: "lifecycle:" + phase,
++      });
++    }
++    if (stream === "tool") {
++      const tool = typeof data.name === "string" ? data.name.slice(0, 60) : "tool";
++      if (phase === "result") return null;
++      const key = (runId ?? "") + ":" + tool;
++      const previous = agentId ? lastToolByAgent.get(agentId) : undefined;
++      if (agentId && previous && previous.key === key && Date.now() - previous.ts < 2000) return null;
++      if (agentId) lastToolByAgent.set(agentId, { key, ts: Date.now() });
++      return record({ ...base, type: "agent.tool", severity: "info", summary: "ferramenta: " + tool, payloadText: "tool:" + tool });
++    }
++    // Assistant/thinking deltas are not stored one by one; a run without a seen
++    // lifecycle start still marks the agent as thinking once.
++    if (runId && !startedRuns.has(runId)) {
++      if (startedRuns.size > 200) startedRuns.clear();
++      startedRuns.add(runId);
++      return record({ ...base, type: "agent.run.start", severity: "info", summary: "run em andamento", payloadText: "stream:" + stream });
++    }
++    return null;
++  }
++  if (name === "chat") {
++    const state = typeof payload.state === "string" ? payload.state : "";
++    if (state === "final") return record({ ...base, type: "chat.final", severity: "success", summary: "resposta concluída", payloadText: "chat:final" });
++    if (state === "error" || state === "aborted") return record({ ...base, type: "chat.error", severity: "warning", summary: "chat " + state, payloadText: "chat:" + state });
++    return null;
++  }
++  if (name.startsWith("exec.approval")) {
++    const resolved = name.endsWith("resolved");
++    return record({
++      ...base,
++      type: resolved ? "approval.resolved" : "approval.requested",
++      severity: resolved ? "success" : "warning",
++      summary: resolved ? "aprovação resolvida" : "aprovação pendente",
++      payloadText: name,
++    });
++  }
++  if (name === "shutdown") {
++    return record({ ...base, type: "gateway.shutdown", severity: "warning", summary: "gateway reiniciando", payloadText: name });
++  }
++  return null;
+ };
+ 
+ export const getSofiaOpsEvents = () => ring;
+diff --git a/src/lib/sofia-ops/serverEventStore.ts b/src/lib/sofia-ops/serverEventStore.ts
+index 0f81faf..3e28bdd 100644
+--- a/src/lib/sofia-ops/serverEventStore.ts
++++ b/src/lib/sofia-ops/serverEventStore.ts
+@@ -12,6 +12,8 @@ export type SofiaOpsServerEvent = {
+   project?: string | null;
+   agentId?: string | null;
+   correlationId?: string | null;
++  synthetic?: boolean;
++  seq: number;
+ };
+ 
+ type Store = { events: SofiaOpsServerEvent[]; sequence: number };
+@@ -51,7 +53,7 @@ const inferSeverity = (text: string): SofiaOpsSeverity => {
+   return "info";
+ };
+ 
+-export const pushSofiaOpsServerEvent = (input: unknown): SofiaOpsServerEvent => {
++export const pushSofiaOpsServerEvent = (input: unknown, options: { synthetic?: boolean } = {}): SofiaOpsServerEvent => {
+   const body = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+   const type = safeField(body.type, 120) || "external.event";
+   const payloadText = safeText(body.payload ?? body);
+@@ -61,8 +63,9 @@ export const pushSofiaOpsServerEvent = (input: unknown): SofiaOpsServerEvent =>
+   const requestedSeverity = safeField(body.severity, 40) || "";
+   const source = validSources.has(requestedSource as SofiaOpsSource) ? requestedSource as SofiaOpsSource : inferSource(combined);
+   const severity = validSeverities.has(requestedSeverity as SofiaOpsSeverity) ? requestedSeverity as SofiaOpsSeverity : inferSeverity(combined);
++  const seq = ++store.sequence;
+   const event: SofiaOpsServerEvent = {
+-    id: "ext-" + Date.now().toString(36) + "-" + (++store.sequence).toString(36),
++    id: (options.synthetic ? "sim-" : "ext-") + Date.now().toString(36) + "-" + seq.toString(36),
+     ts: Date.now(),
+     type,
+     source,
+@@ -73,9 +76,19 @@ export const pushSofiaOpsServerEvent = (input: unknown): SofiaOpsServerEvent =>
+     project: safeField(body.project, 100),
+     agentId: safeField(body.agentId, 100),
+     correlationId: safeField(body.correlationId, 120),
++    synthetic: options.synthetic === true,
++    seq,
+   };
+   store.events = [event, ...store.events].slice(0, MAX_SERVER_EVENTS);
+   return event;
+ };
+ 
+ export const listSofiaOpsServerEvents = () => store.events;
++export const headSofiaOpsServerSeq = () => store.sequence;
++export const listSofiaOpsServerEventsAfter = (after: number) =>
++  after > 0 ? store.events.filter((event) => (event.seq ?? 0) > after) : store.events;
++export const clearSyntheticSofiaOpsServerEvents = () => {
++  const before = store.events.length;
++  store.events = store.events.filter((event) => !event.synthetic);
++  return before - store.events.length;
++};
+diff --git a/src/lib/sofia-ops/twinEngine.ts b/src/lib/sofia-ops/twinEngine.ts
+deleted file mode 100644
+index ea73b15..0000000
+--- a/src/lib/sofia-ops/twinEngine.ts
++++ /dev/null
+@@ -1,96 +0,0 @@
+-export type TwinEvent = {
+-  id: string;
+-  ts: number;
+-  type: string;
+-  source: string;
+-  severity: "info" | "success" | "warning" | "critical";
+-  summary: string;
+-  payloadText?: string;
+-  floorHint?: string | null;
+-  project?: string | null;
+-  agentId?: string | null;
+-  correlationId?: string | null;
+-};
+-
+-export type TwinSnapshot = {
+-  mode: "nominal" | "shadow" | "audit" | "incident" | "simulation";
+-  healthScore: number;
+-  incidentCount: number;
+-  warningCount: number;
+-  shadowCandidateCount: number;
+-  shadowHumanCount: number;
+-  shadowCompareCount: number;
+-  simulationCount: number;
+-  memoryAnchorCount: number;
+-  agentProposalCount: number;
+-  pendingApprovalCount: number;
+-  activeProjects: string[];
+-  activeAgents: string[];
+-  sourceActivity: Record<string, number>;
+-  recommendedFloor: string;
+-  recommendedReason: string;
+-};
+-
+-const has = (event: TwinEvent, value: string) =>
+-  (event.type + " " + event.summary + " " + (event.payloadText || "")).toLowerCase().includes(value);
+-
+-export const recommendTwinFloor = (events: TwinEvent[]) => {
+-  const recent = events[0];
+-  if (!recent) return { floor: "Operação", reason: "aguardando atividade" };
+-  if (recent.severity === "critical") return { floor: "Command", reason: "incidente crítico ativo" };
+-  if (recent.source === "railway" || has(recent, "deploy") || has(recent, "infra")) return { floor: "Infra", reason: "atividade de infraestrutura" };
+-  if (recent.source === "github" || has(recent, "test") || has(recent, "qa") || has(recent, "build")) return { floor: "Dev & QA", reason: "atividade de desenvolvimento/teste" };
+-  if (recent.source === "n8n" || has(recent, "audit") || has(recent, "review")) return { floor: "Auditoria", reason: "workflow/revisão em foco" };
+-  if (has(recent, "analytic") || has(recent, "metric") || has(recent, "compare")) return { floor: "Inteligência", reason: "análise/comparação em foco" };
+-  return { floor: "Operação", reason: "atividade operacional" };
+-};
+-
+-export const deriveTwinSnapshot = (events: TwinEvent[]): TwinSnapshot => {
+-  const now = Date.now();
+-  const recent = events.filter((event) => now - event.ts <= 300000);
+-  const incidents = recent.filter((event) => event.severity === "critical");
+-  const warnings = recent.filter((event) => event.severity === "warning");
+-  const shadowCandidates = events.filter((event) => has(event, "shadow.candidate") || has(event, "shadow_candidate"));
+-  const shadowHumans = events.filter((event) => has(event, "shadow.human") || has(event, "shadow_human"));
+-  const shadowComparisons = events.filter((event) => has(event, "shadow.compare") || has(event, "shadow_compare"));
+-  const simulations = events.filter((event) => has(event, "simulation") || has(event, "dry-run") || has(event, "dry_run"));
+-  const memoryAnchors = events.filter((event) => Boolean(event.floorHint) || has(event, "memory.anchor") || has(event, "memory_anchor"));
+-  const agentProposals = events.filter((event) => has(event, "agent.proposal") || has(event, "agent_proposal"));
+-  const approvals = events.filter((event) => has(event, "approval.request") || has(event, "approval_request"));
+-  const projects = [...new Set(events.map((event) => event.project).filter((value): value is string => Boolean(value)))].slice(0, 12);
+-  const agents = [...new Set(events.map((event) => event.agentId).filter((value): value is string => Boolean(value)))].slice(0, 24);
+-  const sourceActivity: Record<string, number> = {};
+-  for (const event of events) sourceActivity[event.source] = (sourceActivity[event.source] || 0) + 1;
+-  const director = recommendTwinFloor(events);
+-  const penalty = Math.min(80, incidents.length * 25 + warnings.length * 7);
+-  const mode: TwinSnapshot["mode"] = incidents.length
+-    ? "incident"
+-    : simulations.length && events[0] && (has(events[0], "simulation") || has(events[0], "dry-run") || has(events[0], "dry_run"))
+-      ? "simulation"
+-      : shadowCandidates.length && events[0] && has(events[0], "shadow")
+-        ? "shadow"
+-        : events[0] && (events[0].source === "n8n" || has(events[0], "audit") || has(events[0], "review"))
+-          ? "audit"
+-          : "nominal";
+-  return {
+-    mode,
+-    healthScore: Math.max(0, 100 - penalty),
+-    incidentCount: incidents.length,
+-    warningCount: warnings.length,
+-    shadowCandidateCount: shadowCandidates.length,
+-    shadowHumanCount: shadowHumans.length,
+-    shadowCompareCount: shadowComparisons.length,
+-    simulationCount: simulations.length,
+-    memoryAnchorCount: memoryAnchors.length,
+-    agentProposalCount: agentProposals.length,
+-    pendingApprovalCount: approvals.length,
+-    activeProjects: projects,
+-    activeAgents: agents,
+-    sourceActivity,
+-    recommendedFloor: director.floor,
+-    recommendedReason: director.reason,
+-  };
+-};
+-
+-export const replayEventsAt = (events: TwinEvent[], cutoffTs: number) =>
+-  events.filter((event) => event.ts <= cutoffTs);
+diff --git a/src/lib/sofia-ops/worldDirector.ts b/src/lib/sofia-ops/worldDirector.ts
+deleted file mode 100644
+index dc7de0c..0000000
+--- a/src/lib/sofia-ops/worldDirector.ts
++++ /dev/null
+@@ -1,94 +0,0 @@
+-import type { TwinEvent } from "@/lib/sofia-ops/twinEngine";
+-
+-export type SofiaAgentSpatialState = "idle" | "working" | "auditing" | "incident" | "meeting";
+-
+-export type SofiaWarRoom = {
+-  incidentId: string;
+-  type: string;
+-  source: string;
+-  summary: string;
+-  responsibleAgentIds: string[];
+-  openedAt: number;
+-  state: "convocando" | "em andamento";
+-};
+-
+-export type SofiaDirective = {
+-  stateByAgentId: Record<string, SofiaAgentSpatialState>;
+-  deskHoldByAgentId: Record<string, boolean>;
+-  qaHoldByAgentId: Record<string, boolean>;
+-  warRoom: SofiaWarRoom | null;
+-  reasonByAgentId: Record<string, string>;
+-};
+-
+-// Who owns what. Real agent ids from the Sofia gateway; unknown ids fall back
+-// to whatever agents are online so the world still reacts.
+-const OWNER_BY_SOURCE: Record<string, string> = {
+-  railway: "railway-ops",
+-  n8n: "n8n-reviewer",
+-  whatsapp: "sofia-monitor",
+-  github: "supervisor",
+-  openclaw: "main",
+-  system: "supervisor",
+-};
+-
+-const WINDOW_MS = 3 * 60 * 1000;
+-const WAR_ROOM_MS = 5 * 60 * 1000;
+-
+-const text = (event: TwinEvent) => (event.type + " " + event.summary + " " + (event.payloadText || "")).toLowerCase();
+-
+-export const directAgents = (events: TwinEvent[], agentIds: string[], now = Date.now()): SofiaDirective => {
+-  const online = new Set(agentIds);
+-  const pick = (preferred: string, used: Set<string>) => {
+-    if (online.has(preferred)) return preferred;
+-    return agentIds.find((id) => !used.has(id)) ?? null;
+-  };
+-  const directive: SofiaDirective = { stateByAgentId: {}, deskHoldByAgentId: {}, qaHoldByAgentId: {}, warRoom: null, reasonByAgentId: {} };
+-  for (const id of agentIds) directive.stateByAgentId[id] = "idle";
+-
+-  const incident = events.find((event) => event.severity === "critical" && now - event.ts <= WAR_ROOM_MS);
+-  const assigned = new Set<string>();
+-  if (incident) {
+-    const responsible: string[] = [];
+-    for (const preferred of [OWNER_BY_SOURCE[incident.source] ?? "supervisor", "supervisor", "main"]) {
+-      const id = pick(preferred, assigned);
+-      if (id && !assigned.has(id)) { assigned.add(id); responsible.push(id); }
+-    }
+-    for (const id of responsible) {
+-      directive.stateByAgentId[id] = "meeting";
+-      directive.reasonByAgentId[id] = "War Room: " + incident.type;
+-    }
+-    directive.warRoom = {
+-      incidentId: incident.id,
+-      type: incident.type,
+-      source: incident.source,
+-      summary: incident.summary,
+-      responsibleAgentIds: responsible,
+-      openedAt: incident.ts,
+-      state: now - incident.ts < 20000 ? "convocando" : "em andamento",
+-    };
+-  }
+-
+-  // Newest first: the first event that claims an agent wins.
+-  for (const event of events) {
+-    if (now - event.ts > WINDOW_MS) break;
+-    if (event.severity === "critical") continue;
+-    const haystack = text(event);
+-    const auditing = event.source === "n8n" || haystack.includes("audit") || haystack.includes("review") || haystack.includes("qa") || haystack.includes("test");
+-    const preferred = haystack.includes("shadow") ? "sofia-monitor" : OWNER_BY_SOURCE[event.source] ?? "main";
+-    const id = pick(preferred, assigned);
+-    if (!id || assigned.has(id)) continue;
+-    assigned.add(id);
+-    if (auditing) {
+-      directive.qaHoldByAgentId[id] = true;
+-      directive.stateByAgentId[id] = "auditing";
+-    } else {
+-      directive.deskHoldByAgentId[id] = true;
+-      directive.stateByAgentId[id] = "working";
+-    }
+-    directive.reasonByAgentId[id] = event.type;
+-  }
+-  return directive;
+-};
+-
+-export const directiveSignature = (directive: SofiaDirective) =>
+-  JSON.stringify([directive.stateByAgentId, directive.warRoom?.incidentId ?? null, directive.warRoom?.state ?? null]);
+diff --git a/src/lib/sofia-ops/worldState.ts b/src/lib/sofia-ops/worldState.ts
+new file mode 100644
+index 0000000..481e47a
+--- /dev/null
++++ b/src/lib/sofia-ops/worldState.ts
+@@ -0,0 +1,667 @@
++// Sofia Spatial OS — World State.
++//
++// One deterministic reducer: (events, agents, now) -> WorldState.
++// Every spatial behaviour in the office (who walks where, which room lights
++// up, War Room, Shadow Twin, project towers, camera focus) is read from this
++// object. No component keeps its own copy of these rules.
++//
++// OpenClaw stays the source of truth for agents/sessions/runs: agent ids,
++// names and live status come from the gateway; this module only decides how
++// that state and the Event Fabric are represented in space.
++
++export type SofiaSeverity = "info" | "success" | "warning" | "critical";
++
++export type WorldEvent = {
++  id: string;
++  ts: number;
++  type: string;
++  source: string;
++  severity: SofiaSeverity;
++  summary: string;
++  payloadText?: string;
++  floorHint?: string | null;
++  project?: string | null;
++  agentId?: string | null;
++  correlationId?: string | null;
++  runId?: string | null;
++  synthetic?: boolean;
++  seq?: number;
++};
++
++export type SpatialState =
++  | "idle"
++  | "working"
++  | "thinking"
++  | "auditing"
++  | "meeting"
++  | "incident"
++  | "shadow";
++
++// Physical zones. Each one maps to a real place in the office scene.
++export type ZoneId = "desk" | "infra" | "audit" | "qa" | "shadow" | "warroom" | "intel";
++
++export type SofiaFloorId =
++  | "openclaw-ground"
++  | "audit-second"
++  | "dev-third"
++  | "infra-fourth"
++  | "intel-fifth"
++  | "command-sixth";
++
++export type WorldMode = "nominal" | "working" | "deploy" | "audit" | "shadow" | "incident" | "recovery";
++
++export type EventKind =
++  | "deploy"
++  | "deploy.failed"
++  | "audit"
++  | "n8n.failed"
++  | "qa"
++  | "intel"
++  | "shadow.candidate"
++  | "shadow.human"
++  | "shadow.compare"
++  | "incident"
++  | "recovery"
++  | "agent.start"
++  | "agent.tool"
++  | "agent.end"
++  | "agent.error"
++  | "approval"
++  | "generic";
++
++export type WorldAgentInput = {
++  id: string;
++  name?: string;
++  status?: string;
++};
++
++export type AgentWorldState = {
++  state: SpatialState;
++  zone: ZoneId | null;
++  floorId: SofiaFloorId;
++  reason: string;
++  eventId: string | null;
++  since: number;
++  substituteFor: string | null;
++  available: boolean;
++};
++
++export type ZoneWorldState = {
++  level: "idle" | "active" | "alert" | "recovering";
++  owner: string | null;
++  eventId: string | null;
++  label: string;
++  since: number | null;
++  count: number;
++};
++
++export type IncidentWorldState = {
++  id: string;
++  type: string;
++  source: string;
++  project: string;
++  summary: string;
++  openedAt: number;
++  state: "convocando" | "em andamento" | "recuperando";
++  responsible: string[];
++  ownerZone: ZoneId;
++  timeline: { id: string; ts: number; type: string; severity: SofiaSeverity; summary: string }[];
++  evidence: string[];
++  resolvedAt: number | null;
++  synthetic: boolean;
++};
++
++export type ShadowItem = { id: string; ts: number; summary: string; synthetic: boolean };
++
++export type ShadowWorldState = {
++  active: boolean;
++  correlationId: string | null;
++  candidate: ShadowItem | null;
++  human: ShadowItem | null;
++  compare: (ShadowItem & { verdict: "match" | "diverge" | "unknown"; score: number | null }) | null;
++  counts: { candidate: number; human: number; compare: number };
++};
++
++export type ProjectWorldState = {
++  id: string;
++  label: string;
++  health: number;
++  lastTs: number;
++  eventCount: number;
++  recentCount: number;
++  incident: boolean;
++  lastSummary: string;
++  sources: string[];
++  home: boolean;
++};
++
++export type WorldFocus = {
++  zone: ZoneId;
++  floorId: SofiaFloorId;
++  agentId: string | null;
++  eventId: string;
++  reason: string;
++  priority: number;
++};
++
++export type WorldState = {
++  at: number;
++  mode: WorldMode;
++  alertLevel: number;
++  focus: WorldFocus | null;
++  agents: Record<string, AgentWorldState>;
++  zoneByAgentId: Record<string, ZoneId>;
++  zones: Record<ZoneId, ZoneWorldState>;
++  incident: IncidentWorldState | null;
++  shadow: ShadowWorldState;
++  projects: ProjectWorldState[];
++  floorActivity: Record<SofiaFloorId, { recent: number; hot: boolean }>;
++  eventCount: number;
++  syntheticActive: boolean;
++};
++
++export const ZONE_FLOOR: Record<ZoneId, SofiaFloorId> = {
++  desk: "openclaw-ground",
++  shadow: "openclaw-ground",
++  audit: "audit-second",
++  qa: "dev-third",
++  infra: "infra-fourth",
++  intel: "intel-fifth",
++  warroom: "command-sixth",
++};
++
++export const ZONE_LABEL: Record<ZoneId, string> = {
++  desk: "Operação",
++  shadow: "Estação Shadow",
++  audit: "Audit Lab",
++  qa: "QA Lab",
++  infra: "Infra",
++  intel: "Inteligência",
++  warroom: "War Room",
++};
++
++export const FLOOR_LABEL: Record<SofiaFloorId, string> = {
++  "openclaw-ground": "Operação",
++  "audit-second": "Auditoria",
++  "dev-third": "Dev & QA",
++  "infra-fourth": "Infra",
++  "intel-fifth": "Inteligência",
++  "command-sixth": "Command",
++};
++
++export const STATE_LABEL: Record<SpatialState, string> = {
++  idle: "livre",
++  working: "trabalhando",
++  thinking: "pensando",
++  auditing: "auditando",
++  meeting: "war room",
++  incident: "incidente",
++  shadow: "shadow",
++};
++
++// Real Sofia gateway agent ids. Unknown/offline owners are substituted.
++export const ZONE_OWNER: Record<ZoneId, string> = {
++  infra: "railway-ops",
++  audit: "n8n-reviewer",
++  qa: "supervisor",
++  shadow: "sofia-monitor",
++  intel: "main",
++  desk: "main",
++  warroom: "supervisor",
++};
++
++export const HOME_PROJECT = "sofia";
++
++const ACTIVITY_MS = 90_000;
++const RUNTIME_MS = 90_000;
++const FOCUS_MS = 60_000;
++const MODE_MS = 60_000;
++const CONVOCATION_MS = 15_000;
++const RECOVERY_MS = 45_000;
++const INCIDENT_TIMEOUT_MS = 10 * 60_000;
++const SHADOW_MS = 3 * 60_000;
++const RECENT_MS = 5 * 60_000;
++const HOT_MS = 60_000;
++
++const ZONES: ZoneId[] = ["desk", "infra", "audit", "qa", "shadow", "warroom", "intel"];
++const FLOORS: SofiaFloorId[] = ["openclaw-ground", "audit-second", "dev-third", "infra-fourth", "intel-fifth", "command-sixth"];
++
++const lower = (value: unknown) => (typeof value === "string" ? value.toLowerCase() : "");
++const textOf = (event: WorldEvent) => (event.type + " " + event.summary).toLowerCase();
++
++export const slugProject = (value: string | null | undefined) => {
++  const raw = lower(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
++  if (!raw) return HOME_PROJECT;
++  const slug = raw.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
++  return slug || HOME_PROJECT;
++};
++
++export type ClassifiedEvent = {
++  kind: EventKind;
++  zone: ZoneId;
++  floorId: SofiaFloorId;
++  critical: boolean;
++};
++
++export const classifyEvent = (event: WorldEvent): ClassifiedEvent => {
++  const type = lower(event.type);
++  const text = textOf(event);
++  const source = lower(event.source);
++  const pick = (kind: EventKind, zone: ZoneId, critical = false): ClassifiedEvent => ({
++    kind,
++    zone,
++    floorId: ZONE_FLOOR[zone],
++    critical,
++  });
++
++  if (type.startsWith("agent.run.start") || type === "agent.assistant") return pick("agent.start", "desk");
++  if (type.startsWith("agent.tool")) return pick("agent.tool", "desk");
++  if (type.startsWith("agent.run.end") || type === "chat.final") return pick("agent.end", "desk");
++  if (type.startsWith("agent.run.error") || type === "chat.error") return pick("agent.error", "desk");
++  if (type.startsWith("approval.") || type.startsWith("exec.approval")) return pick("approval", "desk");
++
++  if (type.startsWith("shadow.candidate") || type.startsWith("shadow_candidate")) return pick("shadow.candidate", "shadow");
++  if (type.startsWith("shadow.human") || type.startsWith("shadow_human")) return pick("shadow.human", "shadow");
++  if (type.startsWith("shadow.compare") || type.startsWith("shadow_compare")) return pick("shadow.compare", "shadow");
++
++  if (/(recover|resolved|restored|mitigated|healthy|incident\.closed)/.test(type)) return pick("recovery", "warroom");
++
++  const failed = /(fail|error|crash|fatal|down|timeout)/.test(type);
++  const deployish = /(deploy|railway|build|release|service|infra)/.test(type) || source === "railway";
++  const auditish = /(audit|review|n8n|workflow)/.test(type) || source === "n8n";
++
++  if (deployish && failed) return pick("deploy.failed", "infra", true);
++  if (auditish && failed) return pick("n8n.failed", "audit", event.severity === "critical");
++  if (type.includes("incident") || event.severity === "critical") {
++    const zone: ZoneId = deployish ? "infra" : auditish ? "audit" : source === "whatsapp" ? "shadow" : "warroom";
++    return pick("incident", zone, true);
++  }
++  if (deployish) return pick("deploy", "infra");
++  if (auditish) return pick("audit", "audit");
++  if (/(test|qa|regress|lint|ci\.|github|pull|commit)/.test(type) || source === "github") return pick("qa", "qa");
++  if (/(analytic|metric|insight|report|compare|pattern)/.test(text)) return pick("intel", "intel");
++  if (source === "whatsapp") return pick("generic", "desk");
++  return pick("generic", "desk");
++};
++
++const ZONE_STATE: Record<ZoneId, SpatialState> = {
++  desk: "working",
++  infra: "working",
++  audit: "auditing",
++  qa: "auditing",
++  shadow: "shadow",
++  warroom: "meeting",
++  intel: "working",
++};
++
++const parseScore = (event: WorldEvent): number | null => {
++  const blob = (event.payloadText || "") + " " + event.summary;
++  const json = /"(?:score|similarity|match_score)"\s*:\s*(\d+(?:\.\d+)?)/.exec(blob);
++  if (json) {
++    const value = Number(json[1]);
++    return value <= 1 ? Math.round(value * 100) : Math.round(Math.min(100, value));
++  }
++  const pct = /(\d{1,3})\s*%/.exec(blob);
++  return pct ? Math.min(100, Number(pct[1])) : null;
++};
++
++const parseVerdict = (event: WorldEvent, score: number | null): "match" | "diverge" | "unknown" => {
++  const blob = ((event.payloadText || "") + " " + event.summary).toLowerCase();
++  if (/"match"\s*:\s*false|diverg|diferente|mismatch/.test(blob)) return "diverge";
++  if (/"match"\s*:\s*true|equivalente|igual|\bmatch\b|alinhad/.test(blob)) return "match";
++  if (score !== null) return score >= 75 ? "match" : "diverge";
++  return "unknown";
++};
++
++const emptyZones = (): Record<ZoneId, ZoneWorldState> => {
++  const zones = {} as Record<ZoneId, ZoneWorldState>;
++  for (const zone of ZONES) {
++    zones[zone] = { level: "idle", owner: null, eventId: null, label: ZONE_LABEL[zone], since: null, count: 0 };
++  }
++  return zones;
++};
++
++const emptyFloors = () => {
++  const floors = {} as Record<SofiaFloorId, { recent: number; hot: boolean }>;
++  for (const floor of FLOORS) floors[floor] = { recent: 0, hot: false };
++  return floors;
++};
++
++export const reduceWorld = (
++  inputEvents: readonly WorldEvent[],
++  inputAgents: readonly WorldAgentInput[],
++  now: number,
++): WorldState => {
++  // Deterministic order: oldest first, ties by id.
++  const events = inputEvents
++    .filter((event) => event.ts <= now)
++    .slice()
++    .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
++  const newestFirst = events.slice().reverse();
++  const classified = new Map<string, ClassifiedEvent>();
++  for (const event of events) classified.set(event.id, classifyEvent(event));
++
++  const agentIds = inputAgents.map((agent) => agent.id).sort();
++  const statusById = new Map(inputAgents.map((agent) => [agent.id, lower(agent.status)]));
++  const available = (id: string) => statusById.has(id) && statusById.get(id) !== "error" && statusById.get(id) !== "offline";
++
++  const agents: Record<string, AgentWorldState> = {};
++  for (const id of agentIds) {
++    const running = statusById.get(id) === "running";
++    agents[id] = {
++      state: running ? "working" : "idle",
++      zone: null,
++      floorId: "openclaw-ground",
++      reason: running ? "run ativo no OpenClaw" : "",
++      eventId: null,
++      since: now,
++      substituteFor: null,
++      available: available(id),
++    };
++  }
++  const claimed = new Set<string>();
++  // Owner, or the first free available agent (deterministic order) as substitute.
++  const resolveAgent = (preferred: string): { id: string; substituteFor: string | null } | null => {
++    if (agents[preferred] && agents[preferred].available && !claimed.has(preferred)) return { id: preferred, substituteFor: null };
++    const free = agentIds.find((id) => agents[id].available && !claimed.has(id) && agents[id].state === "idle")
++      ?? agentIds.find((id) => agents[id].available && !claimed.has(id));
++    if (!free) return null;
++    return { id: free, substituteFor: preferred };
++  };
++  const claim = (id: string, state: SpatialState, zone: ZoneId | null, event: WorldEvent, reason: string, substituteFor: string | null) => {
++    claimed.add(id);
++    agents[id] = {
++      ...agents[id],
++      state,
++      zone,
++      floorId: zone ? ZONE_FLOOR[zone] : agents[id].floorId,
++      reason,
++      eventId: event.id,
++      since: event.ts,
++      substituteFor,
++    };
++  };
++
++  const zones = emptyZones();
++
++  // ---- Incident / War Room -------------------------------------------------
++  let incident: IncidentWorldState | null = null;
++  let incidentEvent: WorldEvent | null = null;
++  let recoveryEvent: WorldEvent | null = null;
++  for (const event of events) {
++    const info = classified.get(event.id)!;
++    if (info.critical) {
++      // A critical event opens a new incident when none is open (or the previous
++      // one recovered/expired); otherwise it joins the open incident's timeline.
++      if (!incidentEvent || recoveryEvent || event.ts - incidentEvent.ts > INCIDENT_TIMEOUT_MS) {
++        incidentEvent = event;
++        recoveryEvent = null;
++      }
++    } else if (info.kind === "recovery" && incidentEvent && !recoveryEvent) {
++      recoveryEvent = event;
++    }
++  }
++  if (incidentEvent) {
++    const expired = !recoveryEvent && now - incidentEvent.ts > INCIDENT_TIMEOUT_MS;
++    const recoveredLongAgo = recoveryEvent && now - recoveryEvent.ts > RECOVERY_MS;
++    if (!expired && !recoveredLongAgo) {
++      const ownerInfo = classified.get(incidentEvent.id)!;
++      const ownerZone: ZoneId = ownerInfo.zone === "warroom" ? "warroom" : ownerInfo.zone;
++      const responsible: string[] = [];
++      if (!recoveryEvent) {
++        for (const preferred of [ZONE_OWNER[ownerZone], "supervisor", "main"]) {
++          const pickResult = resolveAgent(preferred);
++          if (!pickResult || responsible.includes(pickResult.id)) continue;
++          responsible.push(pickResult.id);
++          claim(pickResult.id, "meeting", "warroom", incidentEvent, "War Room: " + incidentEvent.type, pickResult.substituteFor);
++        }
++      }
++      const related = events.filter((event) =>
++        event.ts >= incidentEvent!.ts &&
++        (event.id === incidentEvent!.id ||
++          (incidentEvent!.correlationId && event.correlationId === incidentEvent!.correlationId) ||
++          event.source === incidentEvent!.source ||
++          classified.get(event.id)!.critical ||
++          classified.get(event.id)!.kind === "recovery"),
++      );
++      incident = {
++        id: incidentEvent.id,
++        type: incidentEvent.type,
++        source: incidentEvent.source,
++        project: slugProject(incidentEvent.project),
++        summary: incidentEvent.summary,
++        openedAt: incidentEvent.ts,
++        state: recoveryEvent ? "recuperando" : now - incidentEvent.ts < CONVOCATION_MS ? "convocando" : "em andamento",
++        responsible,
++        ownerZone,
++        timeline: related.slice(-12).map((event) => ({
++          id: event.id,
++          ts: event.ts,
++          type: event.type,
++          severity: event.severity,
++          summary: event.summary,
++        })),
++        evidence: related
++          .filter((event) => event.severity === "critical" || event.severity === "warning")
++          .slice(-3)
++          .map((event) => (event.payloadText && event.payloadText !== event.summary ? event.payloadText : event.summary).slice(0, 240)),
++        resolvedAt: recoveryEvent ? recoveryEvent.ts : null,
++        synthetic: Boolean(incidentEvent.synthetic),
++      };
++      zones.warroom = {
++        level: recoveryEvent ? "recovering" : "alert",
++        owner: responsible[0] ?? null,
++        eventId: incidentEvent.id,
++        label: "War Room · " + incidentEvent.type,
++        since: incidentEvent.ts,
++        count: related.length,
++      };
++      if (ownerZone !== "warroom") {
++        zones[ownerZone] = {
++          level: recoveryEvent ? "recovering" : "alert",
++          owner: responsible[0] ?? null,
++          eventId: incidentEvent.id,
++          label: ZONE_LABEL[ownerZone] + " · incidente",
++          since: incidentEvent.ts,
++          count: 1,
++        };
++      }
++    }
++  }
++
++  // ---- OpenClaw runtime (real agent runs) ---------------------------------
++  const runtimeSeen = new Set<string>();
++  for (const event of newestFirst) {
++    if (now - event.ts > RUNTIME_MS) break;
++    const info = classified.get(event.id)!;
++    if (!info.kind.startsWith("agent.") && info.kind !== "approval") continue;
++    const id = event.agentId ?? "";
++    if (!id || !agents[id] || runtimeSeen.has(id)) continue;
++    runtimeSeen.add(id);
++    if (claimed.has(id) || info.kind === "agent.end") continue;
++    if (info.kind === "agent.error") claim(id, "incident", "desk", event, "erro no run " + (event.runId ?? ""), null);
++    else if (info.kind === "agent.tool") claim(id, "working", "desk", event, event.summary, null);
++    else if (info.kind === "approval") claim(id, "thinking", "desk", event, "aguardando aprovação", null);
++    else claim(id, "thinking", "desk", event, "run ativo", null);
++  }
++
++  // ---- Event Fabric activity (newest claim wins) --------------------------
++  for (const event of newestFirst) {
++    if (now - event.ts > ACTIVITY_MS) break;
++    const info = classified.get(event.id)!;
++    if (info.critical || info.kind === "recovery" || info.kind.startsWith("agent.") || info.kind === "approval") continue;
++    const zone = info.zone;
++    if (zones[zone].level === "idle") {
++      zones[zone] = { level: "active", owner: null, eventId: event.id, label: ZONE_LABEL[zone] + " · " + event.type, since: event.ts, count: 0 };
++    }
++    zones[zone].count += 1;
++    // Desk work can involve several agents at once; every other zone has one owner.
++    const multiOwner = zone === "desk" && Boolean(event.agentId);
++    if (zones[zone].owner && !multiOwner) continue;
++    const preferred = multiOwner ? event.agentId! : ZONE_OWNER[zone];
++    if (multiOwner && claimed.has(preferred)) continue;
++    const pickResult = resolveAgent(preferred);
++    if (!pickResult) continue;
++    if (!zones[zone].owner) zones[zone].owner = pickResult.id;
++    claim(pickResult.id, ZONE_STATE[zone], zone, event, event.type + " · " + event.summary.slice(0, 80), pickResult.substituteFor);
++  }
++
++  const zoneByAgentId: Record<string, ZoneId> = {};
++  for (const id of agentIds) {
++    const zone = agents[id].zone;
++    if (zone) zoneByAgentId[id] = zone;
++  }
++
++  // ---- Shadow Twin ----------------------------------------------------------
++  const shadow: ShadowWorldState = {
++    active: false,
++    correlationId: null,
++    candidate: null,
++    human: null,
++    compare: null,
++    counts: { candidate: 0, human: 0, compare: 0 },
++  };
++  const latestShadow = newestFirst.find((event) => classified.get(event.id)!.kind.startsWith("shadow."));
++  for (const event of events) {
++    const kind = classified.get(event.id)!.kind;
++    if (kind === "shadow.candidate") shadow.counts.candidate += 1;
++    if (kind === "shadow.human") shadow.counts.human += 1;
++    if (kind === "shadow.compare") shadow.counts.compare += 1;
++  }
++  if (latestShadow && now - latestShadow.ts <= SHADOW_MS) {
++    const correlation = latestShadow.correlationId ?? null;
++    shadow.active = true;
++    shadow.correlationId = correlation;
++    for (const event of newestFirst) {
++      if (now - event.ts > SHADOW_MS) break;
++      const kind = classified.get(event.id)!.kind;
++      if (!kind.startsWith("shadow.")) continue;
++      if (correlation && event.correlationId && event.correlationId !== correlation) continue;
++      const item = { id: event.id, ts: event.ts, summary: event.summary, synthetic: Boolean(event.synthetic) };
++      if (kind === "shadow.candidate" && !shadow.candidate) shadow.candidate = item;
++      if (kind === "shadow.human" && !shadow.human) shadow.human = item;
++      if (kind === "shadow.compare" && !shadow.compare) {
++        const score = parseScore(event);
++        shadow.compare = { ...item, score, verdict: parseVerdict(event, score) };
++      }
++    }
++  }
++
++  // ---- Projects (multi-project fabric) -------------------------------------
++  const projectMap = new Map<string, ProjectWorldState>();
++  const ensureProject = (id: string, label: string) => {
++    let project = projectMap.get(id);
++    if (!project) {
++      project = { id, label, health: 100, lastTs: 0, eventCount: 0, recentCount: 0, incident: false, lastSummary: "", sources: [], home: id === HOME_PROJECT };
++      projectMap.set(id, project);
++    }
++    return project;
++  };
++  ensureProject(HOME_PROJECT, "Sofia");
++  for (const event of events) {
++    const id = slugProject(event.project);
++    const project = ensureProject(id, id === HOME_PROJECT ? "Sofia" : (event.project ?? id).trim().slice(0, 40));
++    project.eventCount += 1;
++    project.lastTs = event.ts;
++    project.lastSummary = event.type + " · " + event.summary.slice(0, 100);
++    if (!project.sources.includes(event.source)) project.sources.push(event.source);
++    if (now - event.ts <= RECENT_MS) {
++      project.recentCount += 1;
++      if (event.severity === "critical") project.health -= 25;
++      else if (event.severity === "warning") project.health -= 7;
++    }
++  }
++  if (incident && incident.state !== "recuperando") ensureProject(incident.project, incident.project).incident = true;
++  const projects = [...projectMap.values()]
++    .map((project) => ({ ...project, health: Math.max(0, Math.min(100, project.health)) }))
++    .sort((a, b) => (a.home === b.home ? (a.id < b.id ? -1 : 1) : a.home ? -1 : 1))
++    .slice(0, 9);
++
++  // ---- Floors ---------------------------------------------------------------
++  const floorActivity = emptyFloors();
++  for (const event of newestFirst) {
++    if (now - event.ts > RECENT_MS) break;
++    const info = classified.get(event.id)!;
++    const floor = info.critical ? "command-sixth" : info.floorId;
++    floorActivity[floor].recent += 1;
++    if (now - event.ts <= HOT_MS) floorActivity[floor].hot = true;
++  }
++
++  // ---- Focus + mode ---------------------------------------------------------
++  let focus: WorldFocus | null = null;
++  if (incident && incident.state !== "recuperando") {
++    focus = {
++      zone: "warroom",
++      floorId: "command-sixth",
++      agentId: incident.responsible[0] ?? null,
++      eventId: incident.id,
++      reason: "War Room · " + incident.type,
++      priority: 3,
++    };
++  } else {
++    for (const event of newestFirst) {
++      if (now - event.ts > FOCUS_MS) break;
++      const info = classified.get(event.id)!;
++      if (info.kind === "agent.end") continue;
++      const agentId = Object.keys(agents).find((id) => agents[id].eventId === event.id) ?? null;
++      if (!agentId && info.kind !== "recovery") continue;
++      focus = {
++        zone: info.zone,
++        floorId: info.floorId,
++        agentId,
++        eventId: event.id,
++        reason: (agentId ? agentId + " · " : "") + event.type,
++        priority: event.severity === "critical" ? 3 : event.severity === "warning" ? 2 : 1,
++      };
++      break;
++    }
++  }
++
++  let mode: WorldMode = "nominal";
++  let alertLevel = 0;
++  if (incident && incident.state !== "recuperando") {
++    mode = "incident";
++    alertLevel = 1;
++  } else if (incident && incident.resolvedAt) {
++    mode = "recovery";
++    alertLevel = Math.max(0, 1 - (now - incident.resolvedAt) / RECOVERY_MS);
++  } else {
++    const latest = newestFirst.find((event) => now - event.ts <= MODE_MS && !classified.get(event.id)!.kind.startsWith("agent."));
++    const kind = latest ? classified.get(latest.id)!.kind : null;
++    if (kind && kind.startsWith("shadow.")) mode = "shadow";
++    else if (kind === "deploy") mode = "deploy";
++    else if (kind === "audit" || kind === "n8n.failed" || kind === "qa") mode = "audit";
++    else if (Object.values(agents).some((agent) => agent.state !== "idle")) mode = "working";
++  }
++
++  return {
++    at: now,
++    mode,
++    alertLevel: Math.round(alertLevel * 100) / 100,
++    focus,
++    agents,
++    zoneByAgentId,
++    zones,
++    incident,
++    shadow,
++    projects,
++    floorActivity,
++    eventCount: events.length,
++    syntheticActive: events.some((event) => event.synthetic && now - event.ts <= RECENT_MS),
++  };
++};
++
++// Changes only when something visible in space changes.
++export const worldSignature = (world: WorldState) =>
++  JSON.stringify([
++    world.mode,
++    Math.round(world.alertLevel * 10),
++    world.focus?.eventId ?? null,
++    world.focus?.agentId ?? null,
++    Object.entries(world.agents).map(([id, agent]) => [id, agent.state, agent.zone, agent.eventId, agent.substituteFor]),
++    world.incident ? [world.incident.id, world.incident.state, world.incident.responsible, world.incident.timeline.length] : null,
++    [world.shadow.active, world.shadow.candidate?.id, world.shadow.human?.id, world.shadow.compare?.id],
++    Object.entries(world.zones).map(([zone, state]) => [zone, state.level, state.owner, state.eventId]),
++    world.projects.map((project) => [project.id, project.health, project.incident, project.recentCount]),
++    Object.entries(world.floorActivity).map(([floor, activity]) => [floor, activity.recent, activity.hot]),
++  ]);
+diff --git a/src/lib/sofia-ops/worldStore.ts b/src/lib/sofia-ops/worldStore.ts
+new file mode 100644
+index 0000000..b21eee1
+--- /dev/null
++++ b/src/lib/sofia-ops/worldStore.ts
+@@ -0,0 +1,281 @@
++"use client";
++
++// Sofia Spatial OS — client world store.
++// Single place that merges the Event Fabric (OpenClaw runtime frames + external
++// ingress polled from /api/sofia-ops/events), derives the World State with the
++// deterministic reducer, keeps RAM-only snapshots for spatial replay, and
++// serves one immutable "view" to the scene and the HUD (useSyncExternalStore).
++
++import { useSyncExternalStore } from "react";
++import { getSofiaOpsEvents, subscribeSofiaOpsEvents } from "@/lib/sofia-ops/eventBus";
++import {
++  reduceWorld,
++  worldSignature,
++  type WorldAgentInput,
++  type WorldEvent,
++  type WorldState,
++} from "@/lib/sofia-ops/worldState";
++
++export type InspectTarget =
++  | { kind: "agent"; id: string }
++  | { kind: "zone"; id: string }
++  | { kind: "incident"; id: string }
++  | { kind: "project"; id: string };
++
++export type GatewayLinkState = "connected" | "connecting" | "reconnecting" | "disconnected";
++
++export type WorldSnapshot = { at: number; world: WorldState; signature: string };
++
++export type SofiaWorldView = {
++  world: WorldState;
++  live: WorldState;
++  replay: { active: boolean; index: number; total: number; at: number | null };
++  snapshots: { at: number; mode: WorldState["mode"] }[];
++  events: WorldEvent[];
++  agents: (WorldAgentInput & { sessionKey?: string | null; runId?: string | null; lastActivityAt?: number | null })[];
++  autoFollow: boolean;
++  glideRequest: number;
++  inspect: InspectTarget | null;
++  gateway: { state: GatewayLinkState; since: number };
++  fabric: { polling: boolean; lastPollOk: number | null; head: number };
++  version: number;
++};
++
++const MAX_SNAPSHOTS = 180;
++const MAX_EVENTS = 240;
++const AUTO_FOLLOW_KEY = "sofia-ops:auto-follow";
++
++const readAutoFollow = () => {
++  try {
++    return window.localStorage.getItem(AUTO_FOLLOW_KEY) !== "0";
++  } catch {
++    return true;
++  }
++};
++
++const emptyWorld = reduceWorld([], [], 0);
++
++const store = {
++  external: new Map<string, WorldEvent>(),
++  head: 0,
++  agents: [] as SofiaWorldView["agents"],
++  agentKey: "",
++  live: emptyWorld,
++  liveSignature: worldSignature(emptyWorld),
++  snapshots: [] as WorldSnapshot[],
++  replayIndex: null as number | null,
++  autoFollow: true,
++  glideRequest: 0,
++  inspect: null as InspectTarget | null,
++  gateway: { state: "connecting" as GatewayLinkState, since: 0 },
++  polling: false,
++  lastPollOk: null as number | null,
++  events: [] as WorldEvent[],
++  view: null as SofiaWorldView | null,
++  version: 0,
++  started: false,
++};
++
++const listeners = new Set<() => void>();
++
++const buildView = (): SofiaWorldView => {
++  const replaying = store.replayIndex !== null && store.snapshots[store.replayIndex];
++  const snapshot = replaying ? store.snapshots[store.replayIndex as number] : null;
++  return {
++    world: snapshot ? snapshot.world : store.live,
++    live: store.live,
++    replay: {
++      active: Boolean(snapshot),
++      index: store.replayIndex ?? store.snapshots.length - 1,
++      total: store.snapshots.length,
++      at: snapshot ? snapshot.at : null,
++    },
++    snapshots: store.snapshots.map((entry) => ({ at: entry.at, mode: entry.world.mode })),
++    events: store.events,
++    agents: store.agents,
++    autoFollow: store.autoFollow,
++    glideRequest: store.glideRequest,
++    inspect: store.inspect,
++    gateway: store.gateway,
++    fabric: { polling: store.polling, lastPollOk: store.lastPollOk, head: store.head },
++    version: store.version,
++  };
++};
++
++const emit = () => {
++  store.version += 1;
++  store.view = buildView();
++  if (typeof window !== "undefined") {
++    const holder = window as Window & { __SOFIA_WORLD?: SofiaWorldView };
++    holder.__SOFIA_WORLD = store.view;
++  }
++  listeners.forEach((listener) => listener());
++};
++
++const mergedEvents = (): WorldEvent[] => {
++  const byId = new Map<string, WorldEvent>();
++  for (const event of getSofiaOpsEvents()) byId.set(event.id, event as WorldEvent);
++  for (const event of store.external.values()) byId.set(event.id, event);
++  return [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, MAX_EVENTS);
++};
++
++// Recompute the live world. Only notifies (and snapshots) when something visible changed.
++const recompute = (force = false) => {
++  const now = Date.now();
++  const events = mergedEvents();
++  const live = reduceWorld(events, store.agents, now);
++  const signature = worldSignature(live);
++  const eventsChanged = events.length !== store.events.length || events[0]?.id !== store.events[0]?.id;
++  store.events = events;
++  const changed = signature !== store.liveSignature;
++  if (!changed && !force && !eventsChanged) return;
++  // Keep the live object identity stable unless something visible changed, so
++  // the scene does not re-plan paths for nothing.
++  if (changed || force) {
++    store.live = live;
++    store.liveSignature = signature;
++  }
++  if (changed) {
++    store.snapshots.push({ at: now, world: live, signature });
++    if (store.snapshots.length > MAX_SNAPSHOTS) {
++      store.snapshots.shift();
++      if (store.replayIndex !== null) store.replayIndex = Math.max(0, store.replayIndex - 1);
++    }
++  }
++  emit();
++};
++
++let pollTimer: number | null = null;
++let tickTimer: number | null = null;
++let recomputeQueued = false;
++
++const queueRecompute = () => {
++  if (recomputeQueued) return;
++  recomputeQueued = true;
++  window.setTimeout(() => {
++    recomputeQueued = false;
++    recompute();
++  }, 120);
++};
++
++const pollOnce = async () => {
++  if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
++  try {
++    const response = await fetch("/api/sofia-ops/events?after=" + store.head, { cache: "no-store", credentials: "same-origin" });
++    if (!response.ok) return;
++    const data = (await response.json()) as { head?: number; events?: WorldEvent[] };
++    store.lastPollOk = Date.now();
++    if (typeof data.head === "number" && data.head < store.head) {
++      // Server restarted (RAM store reset): resync from scratch.
++      store.external.clear();
++      store.head = 0;
++    }
++    let added = 0;
++    for (const event of data.events ?? []) {
++      if (!store.external.has(event.id)) added += 1;
++      store.external.set(event.id, event);
++    }
++    if (store.external.size > MAX_EVENTS) {
++      const keep = [...store.external.values()].sort((a, b) => b.ts - a.ts).slice(0, MAX_EVENTS);
++      store.external = new Map(keep.map((event) => [event.id, event]));
++    }
++    if (typeof data.head === "number") store.head = data.head;
++    if (added) recompute();
++  } catch {
++    // Offline or gateway hiccup: keep the last world, try again later.
++  }
++};
++
++const schedulePoll = () => {
++  // Adaptive cadence: fast while the world is hot, slow when quiet.
++  const newest = store.events[0]?.ts ?? 0;
++  const hot = Date.now() - newest < 120000 || store.live.mode !== "nominal";
++  pollTimer = window.setTimeout(async () => {
++    await pollOnce();
++    schedulePoll();
++  }, hot ? 1500 : 4000);
++};
++
++const start = () => {
++  if (store.started || typeof window === "undefined") return;
++  store.started = true;
++  store.autoFollow = readAutoFollow();
++  store.polling = true;
++  subscribeSofiaOpsEvents(queueRecompute);
++  void pollOnce().then(() => recompute(true));
++  schedulePoll();
++  // Time-window transitions (convocando -> em andamento, recovery fade, expiry).
++  tickTimer = window.setInterval(() => recompute(), 2000);
++  document.addEventListener("visibilitychange", () => {
++    if (document.visibilityState === "visible") {
++      void pollOnce();
++      recompute();
++    }
++  });
++};
++
++export const sofiaWorld = {
++  subscribe(listener: () => void) {
++    start();
++    listeners.add(listener);
++    return () => {
++      listeners.delete(listener);
++    };
++  },
++  getView(): SofiaWorldView {
++    if (!store.view) store.view = buildView();
++    return store.view;
++  },
++  setAgents(agents: SofiaWorldView["agents"]) {
++    const key = agents.map((agent) => agent.id + ":" + (agent.status ?? "") + ":" + (agent.runId ?? "")).join("|");
++    store.agents = agents;
++    if (key === store.agentKey) return;
++    store.agentKey = key;
++    recompute(true);
++  },
++  setGateway(state: GatewayLinkState) {
++    if (store.gateway.state === state) return;
++    store.gateway = { state, since: Date.now() };
++    emit();
++  },
++  setReplayIndex(index: number | null) {
++    const next = index === null || store.snapshots.length === 0 ? null : Math.max(0, Math.min(store.snapshots.length - 1, index));
++    // The last snapshot is "now": selecting it means LIVE.
++    store.replayIndex = next !== null && next >= store.snapshots.length - 1 ? null : next;
++    emit();
++  },
++  setAutoFollow(value: boolean) {
++    store.autoFollow = value;
++    try {
++      window.localStorage.setItem(AUTO_FOLLOW_KEY, value ? "1" : "0");
++    } catch {}
++    emit();
++  },
++  // One-shot camera glide to the current focus (used when auto-follow is OFF).
++  glideToFocus() {
++    store.glideRequest += 1;
++    emit();
++  },
++  inspect(target: InspectTarget | null) {
++    store.inspect = target;
++    emit();
++  },
++  refresh() {
++    void pollOnce();
++  },
++  stopForTests() {
++    if (pollTimer !== null) window.clearTimeout(pollTimer);
++    if (tickTimer !== null) window.clearInterval(tickTimer);
++  },
++};
++
++const serverView = (() => {
++  let cached: SofiaWorldView | null = null;
++  return () => {
++    if (!cached) cached = buildView();
++    return cached;
++  };
++})();
++
++export const useSofiaWorld = (): SofiaWorldView =>
++  useSyncExternalStore(sofiaWorld.subscribe, sofiaWorld.getView, serverView);
+diff --git a/tests/fixtures/sofia-floor1-furniture.json b/tests/fixtures/sofia-floor1-furniture.json
+new file mode 100644
+index 0000000..ed04229
+--- /dev/null
++++ b/tests/fixtures/sofia-floor1-furniture.json
+@@ -0,0 +1 @@
++[{"type":"desk_cubicle","x":610,"y":180,"id":"desk_sofia","_uid":"office_0"},{"type":"desk_cubicle","x":900,"y":180,"id":"desk_supervisor","_uid":"office_1"},{"type":"desk_cubicle","x":470,"y":390,"id":"desk_monitor","_uid":"office_2"},{"type":"desk_cubicle","x":755,"y":430,"id":"desk_n8n","_uid":"office_3"},{"type":"desk_cubicle","x":1040,"y":390,"id":"desk_railway","_uid":"office_4"},{"type":"chair","x":630,"y":168,"facing":180,"_uid":"office_5"},{"type":"computer","x":630,"y":167,"_uid":"office_6"},{"type":"keyboard","x":640,"y":175,"_uid":"office_7"},{"type":"mouse","x":662,"y":175,"_uid":"office_8"},{"type":"chair","x":920,"y":168,"facing":180,"_uid":"office_9"},{"type":"computer","x":920,"y":167,"_uid":"office_10"},{"type":"keyboard","x":930,"y":175,"_uid":"office_11"},{"type":"mouse","x":952,"y":175,"_uid":"office_12"},{"type":"chair","x":490,"y":378,"facing":180,"_uid":"office_13"},{"type":"computer","x":490,"y":377,"_uid":"office_14"},{"type":"keyboard","x":500,"y":385,"_uid":"office_15"},{"type":"mouse","x":522,"y":385,"_uid":"office_16"},{"type":"chair","x":775,"y":418,"facing":180,"_uid":"office_17"},{"type":"computer","x":775,"y":417,"_uid":"office_18"},{"type":"keyboard","x":785,"y":425,"_uid":"office_19"},{"type":"mouse","x":807,"y":425,"_uid":"office_20"},{"type":"chair","x":1060,"y":378,"facing":180,"_uid":"office_21"},{"type":"computer","x":1060,"y":377,"_uid":"office_22"},{"type":"keyboard","x":1070,"y":385,"_uid":"office_23"},{"type":"mouse","x":1092,"y":385,"_uid":"office_24"},{"type":"round_table","x":1450,"y":190,"r":76,"_uid":"office_25"},{"type":"chair","x":1515,"y":190,"facing":0,"_uid":"office_26"},{"type":"chair","x":1490,"y":250,"facing":220,"_uid":"office_27"},{"type":"chair","x":1410,"y":252,"facing":140,"_uid":"office_28"},{"type":"chair","x":1385,"y":190,"facing":90,"_uid":"office_29"},{"type":"chair","x":1410,"y":128,"facing":40,"_uid":"office_30"},{"type":"chair","x":1490,"y":130,"facing":320,"_uid":"office_31"},{"type":"whiteboard","x":1630,"y":115,"w":10,"h":100,"_uid":"office_32"},{"type":"clock","x":1450,"y":40,"_uid":"office_33"},{"type":"couch","x":1370,"y":515,"w":130,"h":44,"facing":0,"_uid":"office_34"},{"type":"couch","x":1600,"y":505,"w":44,"h":130,"vertical":true,"facing":180,"_uid":"office_35"},{"type":"table_rect","x":1480,"y":520,"w":86,"h":42,"_uid":"office_36"},{"type":"beanbag","x":1390,"y":620,"color":"#1565c0","facing":140,"_uid":"office_37"},{"type":"beanbag","x":1540,"y":620,"color":"#7c3aed","facing":220,"_uid":"office_38"},{"type":"plant","x":1325,"y":650,"_uid":"office_39"},{"type":"plant","x":1690,"y":650,"_uid":"office_40"},{"type":"lamp","x":1655,"y":450,"_uid":"office_41"},{"type":"wall","x":30,"y":60,"w":300,"h":8,"_uid":"office_42"},{"type":"wall","x":30,"y":60,"w":8,"h":240,"_uid":"office_43"},{"type":"wall","x":30,"y":300,"w":120,"h":8,"_uid":"office_44"},{"type":"wall","x":210,"y":300,"w":120,"h":8,"_uid":"office_45"},{"type":"door","x":150,"y":300,"w":40,"h":8,"facing":0,"_uid":"office_46"},{"type":"server_rack","x":95,"y":120,"facing":0,"_uid":"office_47"},{"type":"server_rack","x":190,"y":120,"facing":0,"_uid":"office_48"},{"type":"server_terminal","x":145,"y":235,"facing":180,"_uid":"office_49"},{"type":"plant","x":285,"y":250,"_uid":"office_50"},{"type":"kanban_board","x":730,"y":35,"facing":180,"_uid":"office_51"},{"type":"whiteboard","x":1060,"y":35,"w":10,"h":90,"_uid":"office_52"},{"type":"coffee_machine","x":1160,"y":65,"elevation":0.56,"_uid":"office_53"},{"type":"cabinet","x":1120,"y":70,"w":80,"h":40,"elevation":0,"_uid":"office_54"},{"type":"vending","x":1240,"y":55,"_uid":"office_55"},{"type":"pingpong","x":345,"y":590,"w":130,"h":70,"_uid":"office_56"},{"type":"couch","x":560,"y":610,"w":130,"h":44,"_uid":"office_57"},{"type":"table_rect","x":700,"y":610,"w":70,"h":36,"_uid":"office_58"},{"type":"couch","x":820,"y":610,"w":130,"h":44,"_uid":"office_59"},{"type":"plant","x":380,"y":250,"_uid":"office_60"},{"type":"plant","x":520,"y":105,"_uid":"office_61"},{"type":"plant","x":1010,"y":105,"_uid":"office_62"},{"type":"plant","x":1190,"y":320,"_uid":"office_63"},{"type":"plant","x":330,"y":470,"_uid":"office_64"},{"type":"lamp","x":550,"y":300,"_uid":"office_65"},{"type":"lamp","x":970,"y":300,"_uid":"office_66"},{"type":"trash","x":560,"y":200,"_uid":"office_67"},{"type":"trash","x":850,"y":200,"_uid":"office_68"},{"type":"trash","x":420,"y":410,"_uid":"office_69"},{"type":"trash","x":990,"y":410,"_uid":"office_70"},{"type":"wall","x":0,"y":0,"w":1800,"h":8,"_uid":"office_71"},{"type":"wall","x":0,"y":0,"w":8,"h":720,"_uid":"office_72"},{"type":"wall","x":1792,"y":0,"w":8,"h":720,"_uid":"office_73"},{"type":"wall","x":0,"y":712,"w":1800,"h":8,"_uid":"office_74"},{"type":"atm","x":430,"y":210,"facing":90,"_uid":"fi_1790946927066_45"},{"type":"sms_booth","x":700,"y":10,"facing":0,"_uid":"fi_1790946927066_46"},{"type":"phone_booth","x":1050,"y":190,"facing":270,"_uid":"fi_1790946927066_47"},{"type":"wall","x":1126,"y":40,"w":8,"h":640,"_uid":"fi_1790946927066_48"},{"type":"wall","x":1126,"y":40,"w":184,"h":8,"_uid":"fi_1790946927066_49"},{"type":"wall","x":1126,"y":672,"w":184,"h":8,"_uid":"fi_1790946927066_50"},{"type":"wall","x":1302,"y":40,"w":8,"h":220,"_uid":"fi_1790946927066_51"},{"type":"door","x":1280,"y":280,"w":40,"h":8,"facing":90,"_uid":"fi_1790946927066_52"},{"type":"wall","x":1302,"y":300,"w":8,"h":380,"_uid":"fi_1790946927066_53"},{"type":"treadmill","x":1142,"y":90,"facing":90,"_uid":"fi_1790946927066_54"},{"type":"weight_bench","x":1204,"y":92,"facing":90,"_uid":"fi_1790946927066_55"},{"type":"dumbbell_rack","x":1220,"y":160,"facing":180,"_uid":"fi_1790946927066_56"},{"type":"rowing_machine","x":1140,"y":222,"facing":90,"_uid":"fi_1790946927066_57"},{"type":"kettlebell_rack","x":1224,"y":248,"facing":180,"_uid":"fi_1790946927066_58"},{"type":"exercise_bike","x":1146,"y":366,"facing":90,"_uid":"fi_1790946927066_59"},{"type":"punching_bag","x":1266,"y":380,"facing":0,"_uid":"fi_1790946927066_60"},{"type":"yoga_mat","x":1168,"y":542,"facing":0,"color":"#0f766e","_uid":"fi_1790946927066_61"},{"type":"plant","x":1268,"y":82,"_uid":"fi_1790946927066_62"},{"type":"plant","x":1268,"y":622,"_uid":"fi_1790946927066_63"},{"type":"wall","x":1358,"y":40,"w":8,"h":220,"_uid":"fi_1790946927066_64"},{"type":"door","x":1340,"y":280,"w":40,"h":8,"facing":90,"_uid":"fi_1790946927066_65"},{"type":"wall","x":1358,"y":300,"w":8,"h":380,"_uid":"fi_1790946927066_66"},{"type":"wall","x":1358,"y":40,"w":184,"h":8,"_uid":"fi_1790946927066_67"},{"type":"wall","x":1358,"y":672,"w":184,"h":8,"_uid":"fi_1790946927066_68"},{"type":"wall","x":1534,"y":40,"w":8,"h":640,"_uid":"fi_1790946927066_69"},{"type":"qa_terminal","x":1374,"y":92,"facing":90,"_uid":"fi_1790946927066_70"},{"type":"device_rack","x":1454,"y":92,"facing":180,"_uid":"fi_1790946927066_71"},{"type":"device_rack","x":1454,"y":204,"facing":180,"_uid":"fi_1790946927066_72"},{"type":"test_bench","x":1372,"y":316,"facing":90,"_uid":"fi_1790946927066_73"},{"type":"test_bench","x":1372,"y":450,"facing":90,"_uid":"fi_1790946927066_74"},{"type":"plant","x":1496,"y":82,"_uid":"fi_1790946927066_75"},{"type":"plant","x":1496,"y":622,"_uid":"fi_1790946927066_76"},{"type":"jukebox","x":20,"y":380,"facing":90,"_uid":"fi_1790946927066_77"}]
+\ No newline at end of file
+diff --git a/tests/unit/sofiaSpatialTargets.test.ts b/tests/unit/sofiaSpatialTargets.test.ts
+new file mode 100644
+index 0000000..04e3e50
+--- /dev/null
++++ b/tests/unit/sofiaSpatialTargets.test.ts
+@@ -0,0 +1,100 @@
++import { describe, expect, it } from "vitest";
++import floor1 from "../fixtures/sofia-floor1-furniture.json";
++import { astar, buildNavGrid, getMeetingSeatLocations } from "@/features/retro-office/core/navigation";
++import { materializeDefaults } from "@/features/retro-office/core/furnitureDefaults";
++import type { FurnitureItem } from "@/features/retro-office/core/types";
++import {
++  FLOOR_ZONES,
++  resolveSofiaTargets,
++  resolveSpatialLayout,
++} from "@/features/sofia-ops/spatialTargets";
++import type { SofiaFloorId, ZoneId } from "@/lib/sofia-ops/worldState";
++
++const ZONE_AGENT: Record<ZoneId, string> = {
++  infra: "railway-ops",
++  audit: "n8n-reviewer",
++  qa: "supervisor",
++  shadow: "sofia-monitor",
++  warroom: "main",
++  desk: "desk-agent",
++  intel: "intel-agent",
++};
++
++const resolveFloor = (items: FurnitureItem[], floorId: SofiaFloorId, zones: ZoneId[]) => {
++  const { warSeats: seats, anchors, stands, relocated } = resolveSpatialLayout(items, floorId, getMeetingSeatLocations(items));
++  const zoneByAgentId: Record<string, ZoneId> = {};
++  for (const zone of zones) zoneByAgentId[ZONE_AGENT[zone]] = zone;
++  zoneByAgentId.supervisor2 = "warroom";
++  zoneByAgentId.main2 = "warroom";
++  return { seats, anchors, relocated, set: resolveSofiaTargets(zoneByAgentId, anchors, seats, stands) };
++};
++
++describe("Sofia spatial targets", () => {
++  const items = floor1 as FurnitureItem[];
++  const grid = buildNavGrid(items);
++  // Agents start around the Sofia first-floor desks.
++  const starts = [
++    { x: 650, y: 230 },
++    { x: 800, y: 480 },
++    { x: 1080, y: 440 },
++  ];
++
++  it("first floor: every station and War Room seat is reachable by A*", () => {
++    const { seats, anchors, relocated, set } = resolveFloor(items, "openclaw-ground", ["infra", "audit", "qa", "shadow", "warroom"]);
++    // Sofia first floor: the QA lab and its round table are sealed, so audit, QA
++    // and the War Room use semantic fallbacks; infra and shadow keep their rooms.
++    expect(relocated.sort()).toEqual(["audit", "qa", "warroom"]);
++    // No two zones share the same station.
++    const keys = (["infra", "audit", "qa", "shadow", "warroom"] as const).map((zone) => JSON.stringify(anchors[zone]));
++    expect(new Set(keys).size).toBe(keys.length);
++    expect(seats.length).toBeGreaterThanOrEqual(3);
++    expect(anchors.infra && anchors.infra.x < 340 && anchors.infra.y < 330).toBeTruthy();
++    for (const [agentId, target] of Object.entries(set.targets)) {
++      for (const start of starts) {
++        const path = astar(start.x, start.y, target.x, target.y, grid);
++        expect(path.length, agentId + " from " + JSON.stringify(start) + " to " + JSON.stringify(target)).toBeGreaterThan(0);
++        const last = path[path.length - 1];
++        expect(Math.hypot(last.x - target.x, last.y - target.y), agentId + " ends near target").toBeLessThan(60);
++      }
++    }
++    expect(set.targets.main.pose).toBe("sit");
++    expect(set.targets["railway-ops"].pose).toBe("stand");
++  });
++
++  it("first floor: Railway Ops reaches the server room through its door", () => {
++    const { set } = resolveFloor(items, "openclaw-ground", ["infra"]);
++    const target = set.targets["railway-ops"];
++    // Server room walls: x 30..330, y 60..300 (door at x 150..190, y 300).
++    expect(target.x).toBeGreaterThan(30);
++    expect(target.x).toBeLessThan(330);
++    expect(target.y).toBeLessThanOrEqual(310);
++    const path = astar(650, 230, target.x, target.y, grid);
++    expect(path.length).toBeGreaterThan(0);
++    // The route really crosses the door gap instead of stopping outside.
++    expect(path.some((point) => point.y < 300 && point.x < 330)).toBe(true);
++  });
++
++  const presets: [string, SofiaFloorId][] = [
++    ["audit", "audit-second"],
++    ["dev", "dev-third"],
++    ["infra", "infra-fourth"],
++    ["intel", "intel-fifth"],
++    ["command", "command-sixth"],
++  ];
++  for (const [preset, floorId] of presets) {
++    it(floorId + ": its own zones resolve to reachable places", () => {
++      const floorItems = materializeDefaults(preset as Parameters<typeof materializeDefaults>[0]);
++      const floorGrid = buildNavGrid(floorItems);
++      const { set } = resolveFloor(floorItems, floorId, FLOOR_ZONES[floorId]);
++      for (const [agentId, target] of Object.entries(set.targets)) {
++        const path = astar(700, 320, target.x, target.y, floorGrid);
++        expect(path.length, floorId + " " + agentId + " -> " + JSON.stringify(target)).toBeGreaterThan(0);
++      }
++      // Zones without a physical place on this floor fall back to desk work.
++      for (const zone of FLOOR_ZONES[floorId]) {
++        const agentId = ZONE_AGENT[zone];
++        expect(Boolean(set.targets[agentId]) || Boolean(set.deskHolds[agentId]), floorId + " " + zone).toBe(true);
++      }
++    });
++  }
++});
+diff --git a/tests/unit/sofiaWorldState.test.ts b/tests/unit/sofiaWorldState.test.ts
+new file mode 100644
+index 0000000..559d829
+--- /dev/null
++++ b/tests/unit/sofiaWorldState.test.ts
+@@ -0,0 +1,134 @@
++import { describe, expect, it } from "vitest";
++import { classifyEvent, reduceWorld, worldSignature, type WorldEvent } from "@/lib/sofia-ops/worldState";
++
++const AGENTS = ["main", "supervisor", "sofia-monitor", "n8n-reviewer", "railway-ops"].map((id) => ({ id, status: "idle" }));
++const T0 = 1_800_000_000_000;
++
++let counter = 0;
++const ev = (partial: Partial<WorldEvent> & { type: string }, at: number): WorldEvent => ({
++  id: "e" + ++counter,
++  ts: T0 + at,
++  source: "system",
++  severity: "info",
++  summary: partial.type,
++  ...partial,
++});
++
++describe("Sofia world state reducer", () => {
++  it("routes a Railway deploy to Railway Ops in the Infra zone", () => {
++    const world = reduceWorld([ev({ type: "railway.deploy.started", source: "railway" }, 0)], AGENTS, T0 + 1000);
++    expect(world.agents["railway-ops"]).toMatchObject({ state: "working", zone: "infra", floorId: "infra-fourth" });
++    expect(world.zoneByAgentId["railway-ops"]).toBe("infra");
++    expect(world.zones.infra.level).toBe("active");
++    expect(world.mode).toBe("deploy");
++    expect(world.focus).toMatchObject({ zone: "infra", agentId: "railway-ops" });
++  });
++
++  it("sends n8n audit/failure to the n8n Reviewer in the Audit Lab", () => {
++    const world = reduceWorld([ev({ type: "n8n.workflow.failed", source: "n8n", severity: "warning" }, 0)], AGENTS, T0 + 1000);
++    expect(world.agents["n8n-reviewer"]).toMatchObject({ state: "auditing", zone: "audit" });
++    expect(world.incident).toBeNull();
++    expect(world.mode).toBe("audit");
++  });
++
++  it("builds a spatial Shadow Twin pair and parses the comparison", () => {
++    const events = [
++      ev({ type: "shadow.candidate", source: "openclaw", correlationId: "c1" }, 0),
++      ev({ type: "shadow.human", source: "whatsapp", correlationId: "c1" }, 2000),
++      ev({ type: "shadow.compare", source: "openclaw", correlationId: "c1", summary: "Comparação: 82% equivalente", payloadText: '{"score":0.82,"match":true}' }, 4000),
++    ];
++    const world = reduceWorld(events, AGENTS, T0 + 5000);
++    expect(world.shadow.active).toBe(true);
++    expect(world.shadow.candidate?.id).toBe(events[0].id);
++    expect(world.shadow.human?.id).toBe(events[1].id);
++    expect(world.shadow.compare).toMatchObject({ score: 82, verdict: "match" });
++    expect(world.agents["sofia-monitor"]).toMatchObject({ state: "shadow", zone: "shadow" });
++    expect(world.mode).toBe("shadow");
++  });
++
++  it("opens the War Room on a critical event and convokes the responsible agents", () => {
++    const failed = ev({ type: "railway.deploy.failed", source: "railway", severity: "critical" }, 0);
++    const convoking = reduceWorld([failed], AGENTS, T0 + 3000);
++    expect(convoking.incident).toMatchObject({ state: "convocando", ownerZone: "infra" });
++    expect(convoking.incident?.responsible).toEqual(["railway-ops", "supervisor", "main"]);
++    for (const id of ["railway-ops", "supervisor", "main"]) {
++      expect(convoking.agents[id].state).toBe("meeting");
++      expect(convoking.zoneByAgentId[id]).toBe("warroom");
++    }
++    expect(convoking.mode).toBe("incident");
++    expect(convoking.alertLevel).toBe(1);
++    expect(convoking.zones.warroom.level).toBe("alert");
++    expect(convoking.focus?.zone).toBe("warroom");
++    const running = reduceWorld([failed], AGENTS, T0 + 30000);
++    expect(running.incident?.state).toBe("em andamento");
++  });
++
++  it("recovers: releases agents, fades the alert, then clears the incident", () => {
++    const failed = ev({ type: "railway.deploy.failed", source: "railway", severity: "critical" }, 0);
++    const resolved = ev({ type: "incident.resolved", source: "railway", severity: "success" }, 60000);
++    const recovering = reduceWorld([failed, resolved], AGENTS, T0 + 60000 + 9000);
++    expect(recovering.incident?.state).toBe("recuperando");
++    expect(recovering.mode).toBe("recovery");
++    expect(recovering.alertLevel).toBeGreaterThan(0);
++    expect(recovering.alertLevel).toBeLessThan(1);
++    expect(Object.values(recovering.zoneByAgentId)).not.toContain("warroom");
++    expect(recovering.zones.warroom.level).toBe("recovering");
++    const later = reduceWorld([failed, resolved], AGENTS, T0 + 60000 + 60000);
++    expect(later.incident).toBeNull();
++    expect(later.alertLevel).toBe(0);
++  });
++
++  it("substitutes an unavailable owner with a free agent", () => {
++    const agents = AGENTS.filter((agent) => agent.id !== "railway-ops");
++    const world = reduceWorld([ev({ type: "railway.deploy.started", source: "railway" }, 0)], agents, T0 + 1000);
++    const substitute = Object.entries(world.agents).find(([, agent]) => agent.zone === "infra");
++    expect(substitute?.[1].substituteFor).toBe("railway-ops");
++    const errored = reduceWorld(
++      [ev({ type: "n8n.audit.review", source: "n8n" }, 0)],
++      AGENTS.map((agent) => (agent.id === "n8n-reviewer" ? { ...agent, status: "error" } : agent)),
++      T0 + 1000,
++    );
++    const auditor = Object.entries(errored.agents).find(([, agent]) => agent.zone === "audit");
++    expect(auditor?.[0]).not.toBe("n8n-reviewer");
++    expect(auditor?.[1].substituteFor).toBe("n8n-reviewer");
++  });
++
++  it("maps real OpenClaw runtime runs to thinking/working and back to idle", () => {
++    const start = ev({ type: "agent.run.start", source: "openclaw", agentId: "main", runId: "r1" }, 0);
++    const tool = ev({ type: "agent.tool", source: "openclaw", agentId: "main", runId: "r1", summary: "ferramenta: exec" }, 1000);
++    const end = ev({ type: "agent.run.end", source: "openclaw", agentId: "main", runId: "r1", severity: "success" }, 5000);
++    expect(reduceWorld([start], AGENTS, T0 + 500).agents.main.state).toBe("thinking");
++    expect(reduceWorld([start, tool], AGENTS, T0 + 1500).agents.main.state).toBe("working");
++    expect(reduceWorld([start, tool, end], AGENTS, T0 + 6000).agents.main.state).toBe("idle");
++  });
++
++  it("never opens the War Room from runtime chat errors", () => {
++    const world = reduceWorld([ev({ type: "chat.error", source: "openclaw", agentId: "main", severity: "warning", summary: "fatal error timeout" }, 0)], AGENTS, T0 + 1000);
++    expect(world.incident).toBeNull();
++    expect(world.agents.main.state).toBe("incident");
++  });
++
++  it("creates a project tower for events carrying project", () => {
++    const world = reduceWorld([ev({ type: "railway.deploy.started", source: "railway", project: "Clínica Norte" }, 0)], AGENTS, T0 + 1000);
++    expect(world.projects.map((project) => project.id)).toEqual(["sofia", "clinica-norte"]);
++    expect(world.projects[1]).toMatchObject({ recentCount: 1, home: false });
++  });
++
++  it("is deterministic regardless of input order", () => {
++    const events = [
++      ev({ type: "railway.deploy.started", source: "railway" }, 0),
++      ev({ type: "audit.started", source: "n8n" }, 1000),
++      ev({ type: "shadow.candidate", source: "openclaw" }, 2000),
++      ev({ type: "incident.opened", severity: "critical" }, 3000),
++    ];
++    const a = reduceWorld(events, AGENTS, T0 + 4000);
++    const b = reduceWorld(events.slice().reverse(), AGENTS.slice().reverse(), T0 + 4000);
++    expect(worldSignature(a)).toBe(worldSignature(b));
++  });
++
++  it("classifies events into physical zones and floors", () => {
++    expect(classifyEvent(ev({ type: "railway.deploy.failed", source: "railway", severity: "critical" }, 0))).toMatchObject({ kind: "deploy.failed", zone: "infra", critical: true });
++    expect(classifyEvent(ev({ type: "github.ci.test" }, 0))).toMatchObject({ kind: "qa", floorId: "dev-third" });
++    expect(classifyEvent(ev({ type: "incident.resolved", severity: "success" }, 0)).kind).toBe("recovery");
++  });
++});

@@ -1,0 +1,30 @@
+SOFIA CLAW3D SPATIAL OS — PROGRESSO (atualizado continuamente)
+================================================================
+Escopo: somente Railway openclaw-sofia-ops (a6e79267-…). zooming-sparkle: NÃO tocado.
+Segredos: só no Railway (referências ${{service.VAR}}), nunca lidos nem impressos.
+GPU / deep-history / long simulation / XR: OFF.
+
+Último commit bom (produção): a413241 (v2.6) — sofia-claw3d-building, deploy 6fdbd3b3
+Rollback: sofia-claw3d-live (deploy 26151804) — trocar UPSTREAM_HOST do login
+Staging: sofia-claw3d-next (Docker, pinned) + login sofia-claw3d-next-login
+  URL celular: https://sofia-claw3d-next-login-production.up.railway.app/login (mesmo token)
+
+Arquitetura v2.8 (Spatial OS)
+  OpenClaw runtime frames -> eventBus (fatos estruturais, sem conteúdo de conversa)
+  Ingress externo /api/sofia-ops/events (Bearer) + Harness /api/sofia-ops/harness (cookie+header, SIM)
+    -> serverEventStore (RAM, seq) -> poll ?after=seq (1,5s quente / 4s frio)
+  worldStore (cliente) -> reduceWorld (determinístico) -> WorldState
+    -> RetroOffice3D/useAgentTick (alvos espaciais genéricos via A*)
+    -> SofiaSpatialLayer (estações, War Room, Shadow Twin, auras, torres, luz, auto-follow)
+    -> SofiaOpsHud (banners, inspector, replay, andares, projetos, simular, sistema)
+  Snapshots do World State em RAM (180) = replay espacial.
+
+Funcionalidade atual: Etapa 1/2 (v2.8) — validação E2E local
+Testes passados: unit sofiaWorldState 11/11; tsc OK; eslint sem erros novos;
+  E2E local 1ª rodada 18/22 (falhas: rotas nativas apontavam p/ layout padrão -> corrigido com alvos genéricos)
+Problemas reais:
+  - Chromium headless (SwiftShader) roda ~0,3 fps: movimento por frame fica lento no CI;
+    o E2E prova movimento por rota A* não vazia + distância diminuindo, não por chegada.
+  - Layout do 1º andar da Sofia difere do padrão (sala de servidores no canto sup. esq.,
+    War Room = mesa redonda (1450,190)): rotas nativas do Claw3D não servem -> alvos por mobília.
+Próxima ação: E2E v2.8 verde -> gerar patch-ops-v2.8.diff -> commit -> deploy staging
