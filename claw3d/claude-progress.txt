@@ -1,26 +1,20 @@
-SOFIA CLAW3D SPATIAL OS — PROGRESSO (atualizado continuamente)
-================================================================
-Escopo: somente Railway openclaw-sofia-ops (a6e79267-…). zooming-sparkle: NÃO tocado.
-Segredos: só no Railway (referências ${{service.VAR}}), nunca lidos nem impressos.
+SOFIA CLAW3D SPATIAL OS — PROGRESSO
+==================================
+Escopo: somente Railway openclaw-sofia-ops. zooming-sparkle: NÃO tocar.
+Segredos: só no Railway; nunca ler/imprimir.
 GPU / deep-history / long simulation / XR: OFF.
 
-Último commit bom (produção): 0e53008 (v2.8.2) — sofia-claw3d-building, deploy 8cbb9810
-Anterior (rollback): a413241 (v2.6) — deploy 6fdbd3b3
-Rollback: sofia-claw3d-live (deploy 26151804) — trocar UPSTREAM_HOST do login
-Staging: sofia-claw3d-next (Docker, pinned) + login sofia-claw3d-next-login
-  URL celular: https://sofia-claw3d-next-login-production.up.railway.app/login (mesmo token)
+Último estável publicado: v2.8.2 commit 0e53008 — sofia-claw3d-building deploy 8cbb9810.
+Rollback: sofia-claw3d-live deploy 26151804.
 
-Arquitetura v2.8 (Spatial OS)
-  OpenClaw runtime frames -> eventBus (fatos estruturais, sem conteúdo de conversa)
-  Ingress externo /api/sofia-ops/events (Bearer) + Harness /api/sofia-ops/harness (cookie+header, SIM)
-    -> serverEventStore (RAM, seq) -> poll ?after=seq (1,5s quente / 4s frio)
-  worldStore (cliente) -> reduceWorld (determinístico) -> WorldState
-    -> RetroOffice3D/useAgentTick (alvos espaciais genéricos via A*)
-    -> SofiaSpatialLayer (estações, War Room, Shadow Twin, auras, torres, luz, auto-follow)
-    -> SofiaOpsHud (banners, inspector, replay, andares, projetos, simular, sistema)
-  Snapshots do World State em RAM (180) = replay espacial.
+Em validação: v2.9 performance/visibilidade.
+Objetivo: reduzir custo de GPU/3D idle, tornar demo espacial facilmente visível e diferenciar andares sem pesar.
+Mudanças v2.9:
+- remove PointLight global do Spatial OS (mantém ambient tint + beacons baratos);
+- remove labels 3D ociosos das estações;
+- oculta project towers quando nominal/sem atividade;
+- adiciona assinatura geométrica leve por andar 2–6;
+- adiciona botão rápido ▶ DEMO ESPACIAL usando o harness/Event Fabric real;
+- mantém primeiro andar visualmente intacto.
 
-Funcionalidade atual: ENCERRADO — v2.8.2 promovida (escopo congelado pelo usuário).
-Staging: sofia-claw3d-next deploy ac3216de (commit 0e53008).
-Testes finais (build de produção local, mesmo código): unit 23/23; E2E espacial 24/24; E2E etapa 2/3 20/20.
-Backlog não crítico: ver CHECKPOINT-v2.8-2026-10-02.md.
+Próximo gate: build do sofia-claw3d-next -> health -> logs -> validação -> somente então liberar building.
