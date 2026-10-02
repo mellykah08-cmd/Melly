@@ -47,29 +47,36 @@ function hostHeader() {
   return `${UPSTREAM_HOST}:${UPSTREAM_PORT}`;
 }
 
+function authCookie() {
+  return `studio_access=${encodeURIComponent(TOKEN)}`;
+}
+
 function upstreamHeaders(req) {
   const incomingCookie = String(req.headers.cookie || '').trim();
-  const authCookie = `studio_access=${encodeURIComponent(TOKEN)}`;
+  const cookie = authCookie();
   return {
     ...req.headers,
     host: hostHeader(),
-    cookie: incomingCookie ? `${incomingCookie}; ${authCookie}` : authCookie,
+    cookie: incomingCookie ? `${incomingCookie}; ${cookie}` : cookie,
     'x-forwarded-host': req.headers.host || '',
     'x-forwarded-proto': 'https'
   };
 }
 
-function proxyHttp(req,res) {
-  const client = UPSTREAM_TLS ? https : http;
-  const options = {
+function upstreamRequestOptions(method, path, headers) {
+  return {
     host: UPSTREAM_HOST,
     port: UPSTREAM_PORT,
-    method: req.method,
-    path: req.url,
-    headers: upstreamHeaders(req),
+    method,
+    path,
+    headers,
     ...(UPSTREAM_TLS ? { servername: UPSTREAM_HOST, rejectUnauthorized: true } : {})
   };
-  const up = client.request(options, r => {
+}
+
+function proxyHttp(req,res) {
+  const client = UPSTREAM_TLS ? https : http;
+  const up = client.request(upstreamRequestOptions(req.method, req.url, upstreamHeaders(req)), r => {
     res.writeHead(r.statusCode || 502, r.headers);
     r.pipe(res);
   });
@@ -82,11 +89,34 @@ function proxyHttp(req,res) {
   req.pipe(up);
 }
 
+function probeUpstream(res) {
+  const client = UPSTREAM_TLS ? https : http;
+  const headers = { host: hostHeader(), cookie: authCookie(), 'user-agent': 'sofia-claw3d-login-health/2' };
+  const up = client.request(upstreamRequestOptions('GET', '/healthz', headers), r => {
+    r.resume();
+    r.on('end', () => {
+      const ok = (r.statusCode || 500) >= 200 && (r.statusCode || 500) < 300;
+      res.writeHead(ok ? 200 : 502, {'content-type':'text/plain; charset=utf-8'});
+      res.end(ok ? 'ok' : `upstream ${r.statusCode || 502}`);
+    });
+  });
+  up.setTimeout(30000, () => up.destroy(new Error('upstream health timeout')));
+  up.on('error', e => {
+    console.error('upstream health error:', e.message);
+    if (!res.headersSent) res.writeHead(502, {'content-type':'text/plain; charset=utf-8'});
+    res.end('upstream unavailable');
+  });
+  up.end();
+}
+
 const server = http.createServer((req,res) => {
   const path = String(req.url || '/').split('?')[0];
   if (path === '/healthz') {
     res.writeHead(200, {'content-type':'text/plain'});
     return res.end('ok');
+  }
+  if (path === '/upstream-health') {
+    return probeUpstream(res);
   }
   if (path === '/login' && req.method === 'GET') {
     res.writeHead(200, {'content-type':'text/html; charset=utf-8'});
