@@ -49,3 +49,18 @@ Nos andares 2–6 as zonas usam a mobília de cada andar (Infra → racks/termin
 1. Canário: `/canary/off` (só o navegador do usuário).
 2. Produção: `sofia-claw3d-building` → redeploy do deployment anterior no Railway, ou fixar o commit anterior.
 3. Emergência: no login, `UPSTREAM_HOST` → `sofia-claw3d-live` (layout v1 original).
+
+## Estado final (encerramento, escopo congelado)
+
+- Produção: `sofia-claw3d-building` deploy `8cbb9810` — commit `0e53008` (v2.8.2).
+- Staging: `sofia-claw3d-next` deploy `ac3216de` — mesmo commit; canário `/canary/on`.
+- Login: `sofia-claw3d-login` deploy `2aef5470` — Melly `main` `8a8dbf4` (canal canário).
+
+### Backlog não crítico (não iniciado)
+- Ingress externo: campos com nomes não óbvios ainda podem carregar texto; recomendar que o n8n envie só metadados.
+- Agentes da War Room sentam no arco do 1º andar sem cadeira (cosmético; manter "em pé" causava colisões).
+- Laboratório QA e sala de servidores do 1º andar são selados pelo próprio layout (fallbacks semânticos em uso).
+- Harness ligado por padrão (protegido por cookie+header, rate limit, sempre marcado SIM); desligar com `SOFIA_OPS_HARNESS=0` se quiser.
+- Ordem de colisão com vários agentes no mesmo destino; rótulos 3D podem se sobrepor em zoom muito afastado.
+- E2E remoto autenticado não automatizado (exigiria nova credencial); validação no navegador real é via canário.
+- 9 testes unitários do upstream já falhavam antes (5 do upstream puro, 4 da cadeia v1/v2).

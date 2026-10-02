@@ -4,7 +4,8 @@ Escopo: somente Railway openclaw-sofia-ops (a6e79267-…). zooming-sparkle: NÃO
 Segredos: só no Railway (referências ${{service.VAR}}), nunca lidos nem impressos.
 GPU / deep-history / long simulation / XR: OFF.
 
-Último commit bom (produção): a413241 (v2.6) — sofia-claw3d-building, deploy 6fdbd3b3
+Último commit bom (produção): 0e53008 (v2.8.2) — sofia-claw3d-building, deploy 8cbb9810
+Anterior (rollback): a413241 (v2.6) — deploy 6fdbd3b3
 Rollback: sofia-claw3d-live (deploy 26151804) — trocar UPSTREAM_HOST do login
 Staging: sofia-claw3d-next (Docker, pinned) + login sofia-claw3d-next-login
   URL celular: https://sofia-claw3d-next-login-production.up.railway.app/login (mesmo token)
@@ -19,14 +20,7 @@ Arquitetura v2.8 (Spatial OS)
     -> SofiaOpsHud (banners, inspector, replay, andares, projetos, simular, sistema)
   Snapshots do World State em RAM (180) = replay espacial.
 
-Funcionalidade atual: v2.8.2 — ESCOPO CONGELADO (finalização). Revisão independente aplicada:
-  agentes não são mais desviados para a mesa ao serem convocados; recuperação só fecha incidente
-  relacionado (simulado nunca fecha real); queda contínua não "pisca"; sem substituto para quem já está
-  na sala; crítico só por severidade; época do servidor + poll único; correção de relógio; janelas
-  separadas runtime/externo; simulados saem primeiro do buffer; redação de campos sensíveis no ingress;
-  rate limit do harness; destinos só em células livres (sem atravessar móveis); portas não liberam
-  células de móveis; cena assina só o mapa de zonas; layout recalculado só após arraste; alcance por
-  flood-fill (192 ms -> 2 ms); auto-follow com permanência mínima de 8 s.
-Testes (build de produção local): unit 23/23; E2E espacial 23-24/24 (único item instável: distância em
-  linha reta num desvio a ~3 fps headless); E2E etapa 2/3 ver relatório final.
-Próxima ação: staging v2.8.2 -> promoção (building) -> rollback confirmado -> encerrar.
+Funcionalidade atual: ENCERRADO — v2.8.2 promovida (escopo congelado pelo usuário).
+Staging: sofia-claw3d-next deploy ac3216de (commit 0e53008).
+Testes finais (build de produção local, mesmo código): unit 23/23; E2E espacial 24/24; E2E etapa 2/3 20/20.
+Backlog não crítico: ver CHECKPOINT-v2.8-2026-10-02.md.
