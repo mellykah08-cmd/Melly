@@ -27,7 +27,7 @@ const check = (name, ok, detail) => {
   const url = new URL(BASE);
   await context.addCookies([{ name: 'studio_access', value: TOKEN, domain: url.hostname, path: '/', secure: url.protocol === 'https:' }]);
   await context.addInitScript(() => {
-    try { localStorage.setItem('claw3d-onboarding-complete', 'true'); localStorage.setItem('claw3d:onboarding:completed', 'true'); } catch {}
+    try { localStorage.setItem('claw3d:onboarding:completed', 'true'); } catch {}
     window.__canvasMounts = 0;
     window.__loadingSeen = 0;
     const seen = new WeakSet();

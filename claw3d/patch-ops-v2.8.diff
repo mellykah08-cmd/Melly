@@ -1343,10 +1343,10 @@ index 5a04806..050a887 100644
  }
 diff --git a/src/features/sofia-ops/SofiaSpatialLayer.tsx b/src/features/sofia-ops/SofiaSpatialLayer.tsx
 new file mode 100644
-index 0000000..916cd2c
+index 0000000..a6dd20f
 --- /dev/null
 +++ b/src/features/sofia-ops/SofiaSpatialLayer.tsx
-@@ -0,0 +1,615 @@
+@@ -0,0 +1,645 @@
 +"use client";
 +
 +// Sofia Spatial OS — everything the World State shows inside the 3D office.
@@ -1361,7 +1361,7 @@ index 0000000..916cd2c
 +import * as THREE from "three";
 +import { SofiaSafeText as Text } from "@/features/sofia-ops/SafeText";
 +import { toWorld } from "@/features/retro-office/core/geometry";
-+import type { FurnitureItem, RenderAgent } from "@/features/retro-office/core/types";
++import type { RenderAgent } from "@/features/retro-office/core/types";
 +import { sofiaWorld, type SofiaWorldView } from "@/lib/sofia-ops/worldStore";
 +import {
 +  FLOOR_LABEL,
@@ -1423,13 +1423,19 @@ index 0000000..916cd2c
 +const levelColor = (zone: ZoneId, level: ZoneWorldState["level"]) =>
 +  level === "alert" ? "#ff3b4f" : level === "recovering" ? "#34d399" : ZONE_COLOR[zone];
 +
-+const useSecondTick = (enabled: boolean) => {
-+  const [, setTick] = useState(0);
++// Wall clock refreshed once per second while enabled (kept out of render).
++const useNow = (enabled: boolean) => {
++  const [now, setNow] = useState(0);
 +  useEffect(() => {
 +    if (!enabled) return;
-+    const timer = window.setInterval(() => setTick((value) => value + 1), 1000);
-+    return () => window.clearInterval(timer);
++    const first = window.setTimeout(() => setNow(Date.now()), 0);
++    const timer = window.setInterval(() => setNow(Date.now()), 1000);
++    return () => {
++      window.clearTimeout(first);
++      window.clearInterval(timer);
++    };
 +  }, [enabled]);
++  return now;
 +};
 +
 +const elapsed = (from: number, to: number) => {
@@ -1483,17 +1489,20 @@ index 0000000..916cd2c
 +  });
 +  return (
 +    <group position={[wx, 0, wz]}>
++      <mesh ref={ring} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]}>
++        <ringGeometry args={[0.42, 0.56, 6]} />
++        <meshBasicMaterial color={color} transparent opacity={0.22} depthWrite={false} side={THREE.DoubleSide} />
++      </mesh>
++      {/* Invisible tap target covering the whole station (the ring is hollow). */}
 +      <mesh
-+        ref={ring}
-+        rotation={[-Math.PI / 2, 0, 0]}
-+        position={[0, 0.03, 0]}
++        position={[0, 0.5, 0]}
 +        onClick={(event) => {
 +          event.stopPropagation();
 +          sofiaWorld.inspect({ kind: "zone", id: zone });
 +        }}
 +      >
-+        <ringGeometry args={[0.42, 0.56, 6]} />
-+        <meshBasicMaterial color={color} transparent opacity={0.22} depthWrite={false} side={THREE.DoubleSide} />
++        <cylinderGeometry args={[0.56, 0.56, 1, 6]} />
++        <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
 +      </mesh>
 +      <mesh ref={pillar} position={[0, 0.9, 0]} visible={false}>
 +        <cylinderGeometry args={[0.36, 0.48, 1.8, 6, 1, true]} />
@@ -1515,7 +1524,7 @@ index 0000000..916cd2c
 +
 +function WarRoomBeacon({ anchor, world, names, at }: { anchor: Point; world: WorldState; names: Map<string, string>; at: number | null }) {
 +  const incident = world.incident;
-+  useSecondTick(Boolean(incident));
++  const now = useNow(Boolean(incident) && at === null);
 +  const beacon = useRef<THREE.Mesh>(null);
 +  const recovering = incident?.state === "recuperando";
 +  useFrame(({ clock }, delta) => {
@@ -1529,16 +1538,20 @@ index 0000000..916cd2c
 +  const people = incident.responsible.map((id) => names.get(id) ?? id).join(", ");
 +  return (
 +    <group position={[wx, 0, wz]}>
++      <mesh ref={beacon} position={[0, 2.25, 0]}>
++        <octahedronGeometry args={[0.2, 0]} />
++        <meshBasicMaterial color={color} wireframe />
++      </mesh>
++      {/* Tap target around the beacon only (above heads, so agents stay clickable). */}
 +      <mesh
-+        ref={beacon}
-+        position={[0, 2.25, 0]}
++        position={[0, 2.3, 0]}
 +        onClick={(event) => {
 +          event.stopPropagation();
 +          sofiaWorld.inspect({ kind: "incident", id: incident.id });
 +        }}
 +      >
-+        <octahedronGeometry args={[0.2, 0]} />
-+        <meshBasicMaterial color={color} wireframe />
++        <sphereGeometry args={[0.45, 8, 6]} />
++        <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
 +      </mesh>
 +      <Label
 +        y={2.6}
@@ -1548,7 +1561,7 @@ index 0000000..916cd2c
 +          (recovering ? "RECUPERADO · " : "WAR ROOM · ") +
 +          incident.type +
 +          "\n" +
-+          (recovering ? "voltando às atividades" : incident.state + " · " + elapsed(incident.openedAt, at ?? Date.now())) +
++          (recovering ? "voltando às atividades" : incident.state + " · " + elapsed(incident.openedAt, at ?? now)) +
 +          (people && !recovering ? "\n" + people : "")
 +        }
 +      />
@@ -1805,11 +1818,16 @@ index 0000000..916cd2c
 +  }, [gl]);
 +  const focus = view.world.focus;
 +  const key = focus ? focus.eventId + ":" + (focus.agentId ?? "") : null;
++  // A new focus only moves the camera when auto-follow is ON; turning it OFF
++  // stops any glide in progress (the user keeps control).
 +  useEffect(() => {
 +    if (key === focusKeyRef.current) return;
 +    focusKeyRef.current = key;
-+    if (key) glidingRef.current = true;
-+  }, [key]);
++    if (key && view.autoFollow) glidingRef.current = true;
++  }, [key, view.autoFollow]);
++  useEffect(() => {
++    if (!view.autoFollow) glidingRef.current = false;
++  }, [view.autoFollow]);
 +  useEffect(() => {
 +    if (view.glideRequest === glideRequestRef.current) return;
 +    glideRequestRef.current = view.glideRequest;
@@ -1873,8 +1891,20 @@ index 0000000..916cd2c
 +
 +// Observability: a throttled, read-only snapshot of where agents physically are
 +// (used by E2E and the inspector); no React state, ~2 writes per second.
-+function SpatialProbe({ lookupRef, orbitRef }: { lookupRef: RefObject<Map<string, RenderAgent>>; orbitRef: MutableRefObject<{ target: THREE.Vector3; update: () => void } | null> }) {
++function SpatialProbe({ lookupRef, orbitRef, anchors }: { lookupRef: RefObject<Map<string, RenderAgent>>; orbitRef: MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>; anchors: Record<ZoneId, Point | null> | null }) {
 +  const lastRef = useRef(0);
++  const { camera, gl } = useThree();
++  useEffect(() => {
++    // Canvas-point -> client pixel projection, so tests can tap real 3D objects.
++    const holder = window as Window & { __SOFIA_PROJECT?: (x: number, y: number, height?: number) => { x: number; y: number }; __SOFIA_ANCHORS?: typeof anchors };
++    holder.__SOFIA_ANCHORS = anchors;
++    holder.__SOFIA_PROJECT = (x: number, y: number, height = 0.03) => {
++      const [wx, , wz] = toWorld(x, y);
++      const vector = new THREE.Vector3(wx, height, wz).project(camera);
++      const rect = gl.domElement.getBoundingClientRect();
++      return { x: rect.left + ((vector.x + 1) / 2) * rect.width, y: rect.top + ((1 - vector.y) / 2) * rect.height };
++    };
++  }, [anchors, camera, gl]);
 +  useFrame(() => {
 +    const now = performance.now();
 +    if (now - lastRef.current < 500) return;
@@ -1924,7 +1954,7 @@ index 0000000..916cd2c
 +  return (
 +    <>
 +      <AlertLighting world={world} replay={view.replay.active} />
-+      <SpatialProbe lookupRef={agentLookupRef} orbitRef={orbitRef} />
++      <SpatialProbe lookupRef={agentLookupRef} orbitRef={orbitRef} anchors={anchors} />
 +      {floorId && anchors ? (
 +        <>
 +          {(Object.keys(anchors) as ZoneId[]).map((zone) => {
@@ -2271,12 +2301,12 @@ index 0000000..787b574
 +  return { anchors, stands, warSeats, relocated };
 +};
 diff --git a/src/lib/sofia-ops/config.ts b/src/lib/sofia-ops/config.ts
-index d5ba026..8002fa0 100644
+index d5ba026..ed7a460 100644
 --- a/src/lib/sofia-ops/config.ts
 +++ b/src/lib/sofia-ops/config.ts
 @@ -1,4 +1,4 @@
 -export const SOFIA_OPS_VERSION = "2.7.0-max";
-+export const SOFIA_OPS_VERSION = "2.8.0-spatial";
++export const SOFIA_OPS_VERSION = "2.8.1-spatial";
  
  export const SOFIA_OPS_CAPABILITIES = {
    digitalTwin: true,

@@ -21,6 +21,7 @@ case "${1:-prepare}" in
     cd "$WORK"
     npx vitest run tests/unit/sofiaWorldState.test.ts
     node "$HERE/tests/e2e-spatial.js" http://127.0.0.1:3100 local
+    node "$HERE/tests/e2e-stage2.js" http://127.0.0.1:3100 stage2
     ;;
   *)
     COMMIT="$(cat "$HERE/UPSTREAM_COMMIT")"

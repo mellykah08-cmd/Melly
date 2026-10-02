@@ -1,27 +1,165 @@
 {
-  "project": "Sofia Claw3D Spatial OS",
-  "scope": "openclaw-sofia-ops only (zooming-sparkle untouched)",
-  "rule": "passes=true only after a real functional test (E2E in /office or unit test with observable assertion). Never remove a requirement to make it pass.",
-  "features": [
-    {"id": "S1.world-director", "stage": 1, "title": "World Director determinístico (worldState.reduceWorld): modo global, andar, agentes, prioridade, destino, foco, incidente", "test": "tests/unit/sofiaWorldState.test.ts + e2e-spatial", "passes": false},
-    {"id": "S1.states", "stage": 1, "title": "Estados idle/working/thinking/auditing/meeting/incident/shadow", "test": "unit: runtime runs, audit, shadow, war room, chat.error", "passes": false},
-    {"id": "S1.reactive-agents", "stage": 1, "title": "NPCs caminham fisicamente: Railway->Infra(server_room), n8n->Audit Lab(qa_lab), shadow->estação Shadow(sms_booth), critical->War Room", "test": "e2e-spatial (posições/targets reais do renderAgent)", "passes": false},
-    {"id": "S1.substitution", "stage": 1, "title": "Substituição de agente indisponível (offline/erro)", "test": "unit: substitutes an unavailable owner", "passes": false},
-    {"id": "S1.war-room", "stage": 1, "title": "War Room automática: convoca responsáveis, ambiente vermelho, banner origem/tipo/tempo/agentes/estado; recuperação gradual e devolução", "test": "e2e-spatial steps 4-5 + 9", "passes": false},
-    {"id": "S1.shadow-twin", "stage": 1, "title": "Shadow Twin espacial: holograma violeta (candidata), ciano (humano), feixe+painel de comparação; nada enviado", "test": "e2e-spatial step 3 + screenshot 03", "passes": false},
-    {"id": "S1.reactive-env", "stage": 1, "title": "Ambiente reativo: estações por sala (anel+pilar+rótulo), luz/ambiente por modo com lerp, sem recompilar shaders", "test": "screenshots 01-05", "passes": false},
-    {"id": "S1.no-overlay-hijack", "stage": 1, "title": "Eventos não disparam overlays imersivos de QA/GitHub/standup", "test": "e2e-spatial audit check", "passes": false},
-    {"id": "S2.replay", "stage": 2, "title": "Replay espacial em RAM: snapshots do World State dirigem a cena; LIVE restaura", "test": "e2e-spatial step 6", "passes": false},
-    {"id": "S2.floors", "stage": 2, "title": "Andares funcionais: zona->andar, quadro de função por andar, atividade por andar, chip 'ir para andar'", "test": "e2e-floors", "passes": false},
-    {"id": "S2.auto-follow", "stage": 2, "title": "AUTO-FOLLOW ON/OFF: câmera desliza suave até o foco, pausa 12s ao toque; OFF = marcador + chip 'ver'", "test": "e2e-camera", "passes": false},
-    {"id": "S2.multi-project", "stage": 2, "title": "Multi-projeto espacial: eventos com project viram torres no campus", "test": "unit + e2e-spatial step 8", "passes": false},
-    {"id": "S2.inspectors", "stage": 2, "title": "Inspectors: agente, estação, incidente, projeto", "test": "e2e-spatial step 7 + e2e-inspectors", "passes": false},
-    {"id": "S2.harness", "stage": 2, "title": "Event Harness pela mesma Event Fabric (pushSofiaOpsServerEvent), marcado SIM, protegido por cookie+header", "test": "e2e-spatial (todas as etapas usam o harness)", "passes": false},
-    {"id": "S3.webgl", "stage": 3, "title": "Canvas persistente, context lost/restored, DPR adaptativo, sem Loading fallback", "test": "e2e stability checks + probe-visibility", "passes": false},
-    {"id": "S3.gateway-reconnect", "stage": 3, "title": "Gateway caiu: RECONNECTING sem destruir a cena; reconcilia ao voltar", "test": "e2e-reconnect", "passes": false},
-    {"id": "S3.first-floor", "stage": 3, "title": "1º andar preservado (~75 elementos, desks office_0..4, navegador limpo)", "test": "e2e-office floor1Layout", "passes": false},
-    {"id": "S3.flags-off", "stage": 3, "title": "GPU / deep history / long simulation / XR preparados e OFF", "test": "config.ts + painel sistema", "passes": false},
-    {"id": "S3.staging", "stage": 3, "title": "Staging sofia-claw3d-next + login sofia-claw3d-next-login atualizados a cada slice", "test": "deploy SUCCESS + e2e remoto", "passes": false},
-    {"id": "S3.promotion", "stage": 3, "title": "Promoção para produção (login -> building) com rollback live confirmado", "test": "deploy SUCCESS + e2e produção", "passes": false}
-  ]
+ "project": "Sofia Claw3D Spatial OS",
+ "scope": "openclaw-sofia-ops only (zooming-sparkle untouched)",
+ "rule": "passes=true only after a real functional test (E2E in /office or unit test with observable assertion). Never remove a requirement to make it pass.",
+ "features": [
+  {
+   "id": "S1.world-director",
+   "stage": 1,
+   "title": "World Director determinístico (worldState.reduceWorld): modo global, andar, agentes, prioridade, destino, foco, incidente",
+   "test": "tests/unit/sofiaWorldState.test.ts + e2e-spatial",
+   "passes": true,
+   "evidence": "unit sofiaWorldState 11/11 + e2e-spatial 24/24 (mode/focus/zones/incident)"
+  },
+  {
+   "id": "S1.states",
+   "stage": 1,
+   "title": "Estados idle/working/thinking/auditing/meeting/incident/shadow",
+   "test": "unit: runtime runs, audit, shadow, war room, chat.error",
+   "passes": true,
+   "evidence": "unit: thinking/working/idle (runtime runs), auditing, meeting, incident (chat.error), shadow"
+  },
+  {
+   "id": "S1.reactive-agents",
+   "stage": 1,
+   "title": "NPCs caminham fisicamente: Railway->Infra(server_room), n8n->Audit Lab(qa_lab), shadow->estação Shadow(sms_booth), critical->War Room",
+   "test": "e2e-spatial (posições/targets reais do renderAgent)",
+   "passes": true,
+   "evidence": "e2e-spatial: Railway Ops->server room, n8n Reviewer->review board, Sofia Monitor->shadow booth, War Room seats; real A* routes (path>0, distance decreasing)"
+  },
+  {
+   "id": "S1.substitution",
+   "stage": 1,
+   "title": "Substituição de agente indisponível (offline/erro)",
+   "test": "unit: substitutes an unavailable owner",
+   "passes": true,
+   "evidence": "unit: offline owner and errored owner substituted (substituteFor recorded)"
+  },
+  {
+   "id": "S1.war-room",
+   "stage": 1,
+   "title": "War Room automática: convoca responsáveis, ambiente vermelho, banner origem/tipo/tempo/agentes/estado; recuperação gradual e devolução",
+   "test": "e2e-spatial steps 4-5 + 9",
+   "passes": true,
+   "evidence": "e2e-spatial: convocation, 3 responsible, banner, A* to seats, recovery banner, fade, incident cleared"
+  },
+  {
+   "id": "S1.shadow-twin",
+   "stage": 1,
+   "title": "Shadow Twin espacial: holograma violeta (candidata), ciano (humano), feixe+painel de comparação; nada enviado",
+   "test": "e2e-spatial step 3 + screenshot 03",
+   "passes": true,
+   "evidence": "e2e-spatial: candidate+human+compare 82% match; screenshot 03-shadow"
+  },
+  {
+   "id": "S1.reactive-env",
+   "stage": 1,
+   "title": "Ambiente reativo: estações por sala (anel+pilar+rótulo), luz/ambiente por modo com lerp, sem recompilar shaders",
+   "test": "screenshots 01-05",
+   "passes": true,
+   "evidence": "screenshots 01-05 (stations, towers health, alert lighting); light count constant"
+  },
+  {
+   "id": "S1.no-overlay-hijack",
+   "stage": 1,
+   "title": "Eventos não disparam overlays imersivos de QA/GitHub/standup",
+   "test": "e2e-spatial audit check",
+   "passes": true,
+   "evidence": "e2e-spatial: no QA/GitHub immersive overlay text after audit/deploy"
+  },
+  {
+   "id": "S2.replay",
+   "stage": 2,
+   "title": "Replay espacial em RAM: snapshots do World State dirigem a cena; LIVE restaura",
+   "test": "e2e-spatial step 6",
+   "passes": true,
+   "evidence": "e2e-spatial: incident snapshot restores War Room routing, REPLAY banner, LIVE restores"
+  },
+  {
+   "id": "S2.floors",
+   "stage": 2,
+   "title": "Andares funcionais: zona->andar, quadro de função por andar, atividade por andar, chip 'ir para andar'",
+   "test": "e2e-floors",
+   "passes": true,
+   "evidence": "e2e-stage2: deploy -> focus infra-fourth, chip, floor switch, Infra-floor stations + routing"
+  },
+  {
+   "id": "S2.auto-follow",
+   "stage": 2,
+   "title": "AUTO-FOLLOW ON/OFF: câmera desliza suave até o foco, pausa 12s ao toque; OFF = marcador + chip 'ver'",
+   "test": "e2e-camera",
+   "passes": true,
+   "evidence": "e2e-stage2: ON glides, OFF keeps camera (moved 0), 'ver' glides once"
+  },
+  {
+   "id": "S2.multi-project",
+   "stage": 2,
+   "title": "Multi-projeto espacial: eventos com project viram torres no campus",
+   "test": "unit + e2e-spatial step 8",
+   "passes": true,
+   "evidence": "unit + e2e-spatial: project event -> clinica-norte tower"
+  },
+  {
+   "id": "S2.inspectors",
+   "stage": 2,
+   "title": "Inspectors: agente, estação, incidente, projeto",
+   "test": "e2e-spatial step 7 + e2e-inspectors",
+   "passes": true,
+   "evidence": "e2e: agent (HUD), station (real 3D tap), incident (banner), project (HUD list)"
+  },
+  {
+   "id": "S2.harness",
+   "stage": 2,
+   "title": "Event Harness pela mesma Event Fabric (pushSofiaOpsServerEvent), marcado SIM, protegido por cookie+header",
+   "test": "e2e-spatial (todas as etapas usam o harness)",
+   "passes": true,
+   "evidence": "all E2E steps use /api/sofia-ops/harness -> pushSofiaOpsServerEvent (SIM flag)"
+  },
+  {
+   "id": "S3.webgl",
+   "stage": 3,
+   "title": "Canvas persistente, context lost/restored, DPR adaptativo, sem Loading fallback",
+   "test": "e2e stability checks + probe-visibility",
+   "passes": true,
+   "evidence": "e2e-stage2: context lost/restored, frozen->active, canvas mounted once, no Loading fallback"
+  },
+  {
+   "id": "S3.gateway-reconnect",
+   "stage": 3,
+   "title": "Gateway caiu: RECONNECTING sem destruir a cena; reconcilia ao voltar",
+   "test": "e2e-reconnect",
+   "passes": true,
+   "evidence": "e2e-stage2: gateway killed -> RECONNECTING, canvas+NPCs kept, reconciled on return"
+  },
+  {
+   "id": "S3.first-floor",
+   "stage": 3,
+   "title": "1º andar preservado (~75 elementos, desks office_0..4, navegador limpo)",
+   "test": "e2e-office floor1Layout",
+   "passes": true,
+   "evidence": "e2e-stage2: 108 items (75 legacy + migrated rooms), desks office_0..4 at original positions; mobile directory collapsed"
+  },
+  {
+   "id": "S3.flags-off",
+   "stage": 3,
+   "title": "GPU / deep history / long simulation / XR preparados e OFF",
+   "test": "config.ts + painel sistema",
+   "passes": true,
+   "evidence": "e2e-stage2: system tab shows GPU/DEEP HISTORY/LONG SIMULATION/XR OFF"
+  },
+  {
+   "id": "S3.staging",
+   "stage": 3,
+   "title": "Staging sofia-claw3d-next + login sofia-claw3d-next-login atualizados a cada slice",
+   "test": "deploy SUCCESS + e2e remoto",
+   "passes": false
+  },
+  {
+   "id": "S3.promotion",
+   "stage": 3,
+   "title": "Promoção para produção (login -> building) com rollback live confirmado",
+   "test": "deploy SUCCESS + e2e produção",
+   "passes": false
+  }
+ ]
 }

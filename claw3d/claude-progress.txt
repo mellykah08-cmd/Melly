@@ -19,12 +19,21 @@ Arquitetura v2.8 (Spatial OS)
     -> SofiaOpsHud (banners, inspector, replay, andares, projetos, simular, sistema)
   Snapshots do World State em RAM (180) = replay espacial.
 
-Funcionalidade atual: Etapa 1/2 (v2.8) — validação E2E local
-Testes passados: unit sofiaWorldState 11/11; tsc OK; eslint sem erros novos;
-  E2E local 1ª rodada 18/22 (falhas: rotas nativas apontavam p/ layout padrão -> corrigido com alvos genéricos)
-Problemas reais:
-  - Chromium headless (SwiftShader) roda ~0,3 fps: movimento por frame fica lento no CI;
-    o E2E prova movimento por rota A* não vazia + distância diminuindo, não por chegada.
-  - Layout do 1º andar da Sofia difere do padrão (sala de servidores no canto sup. esq.,
-    War Room = mesa redonda (1450,190)): rotas nativas do Claw3D não servem -> alvos por mobília.
-Próxima ação: E2E v2.8 verde -> gerar patch-ops-v2.8.diff -> commit -> deploy staging
+Funcionalidade atual: v2.8.1 — Etapas 1+2 completas, Etapa 3 em validação (staging + promoção)
+Testes passados (local, build de produção):
+  - unit: sofiaWorldState 11/11, sofiaSpatialTargets 7/7 (A* no layout real do 1º andar + 5 andares)
+  - suíte upstream: 1087 ok; 9 falhas pré-existentes (5 upstream puro + 4 da cadeia v1/v2, idênticas na base v2.7)
+  - tsc OK; eslint: zero erros novos (6 erros upstream inalterados)
+  - E2E espacial (tests/e2e-spatial.js) 24/24; E2E etapa 2/3 (tests/e2e-stage2.js) 20/20
+Problemas reais encontrados e corrigidos:
+  - Rotas nativas do Claw3D apontavam p/ layout padrão (sala de servidores no canto inferior);
+    o 1º andar da Sofia é outro -> destinos derivados da mobília de cada andar.
+  - Padding das paredes selava portas na grade A* -> portas reabertas no buildNavGrid.
+  - Laboratório QA do 1º andar é selado no próprio layout -> fallback semântico (quadro de revisão,
+    War Room em arco diante do kanban), sem mexer no layout visual.
+  - v2.7 usava qaHold/standup -> abriria overlays imersivos; removido.
+  - AUTO OFF ainda movia câmera em foco novo -> corrigido; anel oco não recebia toque -> alvo invisível.
+  - Diretório de andares cobria 60% da tela em navegador limpo no celular -> recolhido por padrão.
+Limitação de ambiente: Chromium headless ~3 fps (SwiftShader); E2E prova rota A* + aproximação, não chegada.
+Canal canário: login de produção /canary/on -> staging (mesma origem, device já pareado); /canary/off volta.
+Próxima ação: deploy staging v2.8.1 -> smoke remoto -> promoção (building = mesmo commit) -> rollback confirmado.
