@@ -139,6 +139,13 @@ const server = http.createServer((req,res) => {
     });
     return;
   }
+  // Sofia Ops external event ingress (n8n, Railway, WhatsApp, other projects).
+  // Machine callers have no browser cookie: pass Bearer-authenticated POSTs to
+  // this single path through; the upstream route validates the Bearer token
+  // (SOFIA_OPS_EVENT_TOKEN) itself and rejects everything else with 401.
+  if (path === '/api/sofia-ops/events' && req.method === 'POST' && /^Bearer\s+\S+/.test(String(req.headers.authorization || ''))) {
+    return proxyHttp(req,res);
+  }
   if (!authed(req)) {
     res.writeHead(302, {location:'/login'});
     return res.end();
