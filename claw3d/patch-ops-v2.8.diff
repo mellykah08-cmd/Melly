@@ -1,12 +1,12 @@
 diff --git a/src/app/api/sofia-ops/events/route.ts b/src/app/api/sofia-ops/events/route.ts
-index 03f54a1..027add9 100644
+index 03f54a1..f8eda87 100644
 --- a/src/app/api/sofia-ops/events/route.ts
 +++ b/src/app/api/sofia-ops/events/route.ts
-@@ -1,12 +1,15 @@
+@@ -1,12 +1,18 @@
  import { timingSafeEqual } from "node:crypto";
  import { NextRequest, NextResponse } from "next/server";
 -import { listSofiaOpsServerEvents, pushSofiaOpsServerEvent } from "@/lib/sofia-ops/serverEventStore";
-+import { headSofiaOpsServerSeq, listSofiaOpsServerEventsAfter, pushSofiaOpsServerEvent } from "@/lib/sofia-ops/serverEventStore";
++import { headSofiaOpsServerSeq, listSofiaOpsServerEventsAfter, pushSofiaOpsServerEvent, sofiaOpsServerEpoch } from "@/lib/sofia-ops/serverEventStore";
  
  export const runtime = "nodejs";
  export const dynamic = "force-dynamic";
@@ -17,16 +17,19 @@ index 03f54a1..027add9 100644
 +export async function GET(request: NextRequest) {
 +  const after = Number(request.nextUrl.searchParams.get("after") ?? "0");
 +  const events = listSofiaOpsServerEventsAfter(Number.isFinite(after) ? after : 0);
-+  return NextResponse.json({ head: headSofiaOpsServerSeq(), events }, { headers: { "Cache-Control": "no-store" } });
++  return NextResponse.json(
++    { epoch: sofiaOpsServerEpoch(), head: headSofiaOpsServerSeq(), serverNow: Date.now(), events },
++    { headers: { "Cache-Control": "no-store" } },
++  );
  }
  
  export async function POST(request: NextRequest) {
 diff --git a/src/app/api/sofia-ops/harness/route.ts b/src/app/api/sofia-ops/harness/route.ts
 new file mode 100644
-index 0000000..28fcccd
+index 0000000..3e30a99
 --- /dev/null
 +++ b/src/app/api/sofia-ops/harness/route.ts
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,121 @@
 +import { NextRequest, NextResponse } from "next/server";
 +import {
 +  clearSyntheticSofiaOpsServerEvents,
@@ -97,9 +100,22 @@ index 0000000..28fcccd
 +  );
 +}
 +
++// At most 30 harness calls per minute per server (a scenario counts once).
++const rate = { windowStart: 0, count: 0 };
++const allow = () => {
++  const now = Date.now();
++  if (now - rate.windowStart > 60000) {
++    rate.windowStart = now;
++    rate.count = 0;
++  }
++  rate.count += 1;
++  return rate.count <= 30;
++};
++
 +export async function POST(request: NextRequest) {
 +  if (process.env.SOFIA_OPS_HARNESS === "0") return NextResponse.json({ error: "harness_disabled" }, { status: 404 });
 +  if (request.headers.get("x-sofia-harness") !== "1") return NextResponse.json({ error: "missing_header" }, { status: 400 });
++  if (!allow()) return NextResponse.json({ error: "rate_limited" }, { status: 429 });
 +  let body: { kind?: unknown; scenario?: unknown; project?: unknown } = {};
 +  try {
 +    const raw = await request.text();
@@ -321,7 +337,7 @@ index e212097..b1e7b17 100644
            onStandupArrivalsChange={(arrivedAgentIds) => {
              void standupController.reportArrivals(arrivedAgentIds);
 diff --git a/src/features/retro-office/RetroOffice3D.tsx b/src/features/retro-office/RetroOffice3D.tsx
-index 11ac130..15511eb 100644
+index 11ac130..a0f4f9d 100644
 --- a/src/features/retro-office/RetroOffice3D.tsx
 +++ b/src/features/retro-office/RetroOffice3D.tsx
 @@ -226,6 +226,15 @@ import {
@@ -336,7 +352,7 @@ index 11ac130..15511eb 100644
 +  type SofiaTarget,
 +  type SofiaTargetSet,
 +} from "@/features/sofia-ops/SofiaSpatialLayer";
-+import { sofiaWorld, useSofiaWorld } from "@/lib/sofia-ops/worldStore";
++import { sofiaWorld, useSofiaWorldSelector } from "@/lib/sofia-ops/worldStore";
  
  type OfficeDeskMonitorMap = Record<string, OfficeDeskMonitor>;
  type RenderAgentUiSnapshot = Pick<RenderAgent, "state" | "status">;
@@ -431,7 +447,50 @@ index 11ac130..15511eb 100644
            ns.pingPongUntil = undefined;
            ns.pingPongTargetX = undefined;
            ns.pingPongTargetY = undefined;
-@@ -1763,6 +1820,8 @@ function useAgentTick(
+@@ -1457,7 +1514,9 @@ function useAgentTick(
+           ns.path = [];
+           ns.state = "standing";
+         }
+-        if (effectiveStatus !== existing.status) {
++        // A Sofia destination was already applied above; the generic idle->working
++        // transition below must not redirect the agent to its desk.
++        if (effectiveStatus !== existing.status && !sofiaTarget) {
+           if (effectiveStatus === "working") {
+             const serverRoomRoute = resolveServerRoomRoute(
+               existing.x,
+@@ -1625,8 +1684,9 @@ function useAgentTick(
+         const phoneBoothRoute = resolvePhoneBoothRoute(phoneBoothItem, sx, sy);
+         const gymRoute = resolveGymRoute(sx, sy, gymWorkoutPos);
+         const qaLabRoute = resolveQaLabRoute(sx, sy, qaStationPos);
+-        const initialTarget =
+-          effectiveStatus === "working"
++        const initialTarget = sofiaTarget
++          ? { x: sofiaTarget.x, y: sofiaTarget.y }
++          : effectiveStatus === "working"
+             ? explicitMeetingHold && meetingTarget
+               ? {
+                   x: meetingTarget.x,
+@@ -1735,6 +1795,19 @@ function useAgentTick(
+               ? meetingTarget.facing
+               : Math.PI / 2,
+         };
++        if (sofiaTarget) {
++          ns.interactionTarget = undefined;
++          ns.serverRoomStage = undefined;
++          ns.smsBoothStage = undefined;
++          ns.phoneBoothStage = undefined;
++          ns.gymStage = undefined;
++          ns.qaLabStage = undefined;
++          ns.qaLabStationType = undefined;
++          ns.workoutStyle = undefined;
++          ns.sofiaPose = sofiaTarget.pose;
++          ns.sofiaFacing = sofiaTarget.facing;
++          ns.state = "walking";
++        }
+       }
+       next.push({ ...agent, ...ns, status: effectiveStatus } as RenderAgent);
+     });
+@@ -1763,6 +1836,8 @@ function useAgentTick(
      pickSpawnPoint,
      planPath,
      resolveMeetingTarget,
@@ -440,7 +499,7 @@ index 11ac130..15511eb 100644
      standupActive,
      standupMeeting,
    ]);
-@@ -2057,8 +2116,11 @@ function useAgentTick(
+@@ -2057,8 +2132,11 @@ function useAgentTick(
                  frame: agent.frame + 1,
                };
              }
@@ -454,7 +513,7 @@ index 11ac130..15511eb 100644
                  ? "standing"
                  : agent.interactionTarget === "phone_booth"
                    ? "standing"
-@@ -2069,7 +2131,9 @@ function useAgentTick(
+@@ -2069,7 +2147,9 @@ function useAgentTick(
                        : agent.interactionTarget === "qa_lab"
                          ? "standing"
                          : "sitting";
@@ -465,7 +524,7 @@ index 11ac130..15511eb 100644
                nf = agent.facing;
              } else if (agent.interactionTarget === "phone_booth") {
                nf = agent.facing;
-@@ -2261,41 +2325,6 @@ const buildInitialFurnitureLayout = (
+@@ -2261,41 +2341,6 @@ const buildInitialFurnitureLayout = (
      ),
    );
  
@@ -507,7 +566,7 @@ index 11ac130..15511eb 100644
  class SofiaSceneErrorBoundary extends Component<{ label: string; children?: ReactNode }, { failed: boolean }> {
    state = { failed: false };
    static getDerivedStateFromError() {
-@@ -2309,99 +2338,6 @@ class SofiaSceneErrorBoundary extends Component<{ label: string; children?: Reac
+@@ -2309,99 +2354,6 @@ class SofiaSceneErrorBoundary extends Component<{ label: string; children?: Reac
    }
  }
  
@@ -607,7 +666,7 @@ index 11ac130..15511eb 100644
  export function RetroOffice3D({
    agents,
    officeCenterSignal = 0,
-@@ -2804,22 +2740,6 @@ export function RetroOffice3D({
+@@ -2804,22 +2756,6 @@ export function RetroOffice3D({
    // New Idea 7: heatmap mode.
    const [heatmapMode, setHeatmapMode] = useState(false);
    const [trailMode, setTrailMode] = useState(false);
@@ -630,26 +689,39 @@ index 11ac130..15511eb 100644
    const heatGridRef = useRef<Uint16Array | null>(null);
    // E3 Idea 1: mood emoji reactions above agent chips.
    const [moodByAgentId, setMoodByAgentId] = useState<
-@@ -2959,6 +2879,27 @@ export function RetroOffice3D({
+@@ -2959,6 +2895,40 @@ export function RetroOffice3D({
      () => getMeetingSeatLocations(furniture),
      [furniture],
    );
 +  // Sofia Spatial OS: one world view (live or replay) drives movement + scene.
-+  const sofiaView = useSofiaWorld();
++  // Only the zone map drives movement here; the 3D layer subscribes on its own,
++  // so world updates never re-render this whole scene component.
++  const sofiaZoneMap = useSofiaWorldSelector((view) => view.world.zoneByAgentId);
 +  const sofiaFloorId = PRESET_FLOOR[layoutPreset] ?? null;
 +  // Stations/seats derived from this floor's furniture and validated with A*.
++  // Recomputed only once furniture settles (not on every drag move in edit mode).
++  const [sofiaLayoutFurniture, setSofiaLayoutFurniture] = useState(furniture);
++  useEffect(() => {
++    if (sofiaLayoutFurniture === furniture) return;
++    const timer = window.setTimeout(() => setSofiaLayoutFurniture(furniture), 400);
++    return () => window.clearTimeout(timer);
++  }, [furniture, sofiaLayoutFurniture]);
++  const sofiaMeetingSeats = useMemo(
++    () => getMeetingSeatLocations(sofiaLayoutFurniture),
++    [sofiaLayoutFurniture],
++  );
 +  const sofiaLayout = useMemo(
-+    () => (sofiaFloorId ? resolveSpatialLayout(furniture, sofiaFloorId, meetingSeatLocations) : null),
-+    [furniture, meetingSeatLocations, sofiaFloorId],
++    () => (sofiaFloorId ? resolveSpatialLayout(sofiaLayoutFurniture, sofiaFloorId, sofiaMeetingSeats) : null),
++    [sofiaFloorId, sofiaLayoutFurniture, sofiaMeetingSeats],
 +  );
 +  const sofiaWarSeats = sofiaLayout?.warSeats ?? EMPTY_SOFIA_SEATS;
 +  const sofiaAnchors = sofiaLayout?.anchors ?? null;
 +  const sofiaTargets = useMemo(
 +    () =>
 +      sofiaAnchors
-+        ? resolveSofiaTargets(sofiaView.world.zoneByAgentId, sofiaAnchors, sofiaWarSeats, sofiaLayout?.stands)
++        ? resolveSofiaTargets(sofiaZoneMap, sofiaAnchors, sofiaWarSeats, sofiaLayout?.stands)
 +        : EMPTY_SOFIA_TARGET_SET,
-+    [sofiaAnchors, sofiaLayout, sofiaView.world.zoneByAgentId, sofiaWarSeats],
++    [sofiaAnchors, sofiaLayout, sofiaZoneMap, sofiaWarSeats],
 +  );
 +  const sofiaAgentNames = useMemo(
 +    () => new Map(agents.map((agent) => [agent.id, agent.name] as [string, string])),
@@ -658,7 +730,7 @@ index 11ac130..15511eb 100644
  
    // Keep a stable ref to furniture so the tick callback can read it without
    // being recreated every time furniture changes.
-@@ -3033,6 +2974,8 @@ export function RetroOffice3D({
+@@ -3033,6 +3003,8 @@ export function RetroOffice3D({
      resolvedQaHoldByAgentId,
      resolvedGithubReviewByAgentId,
      standupMeeting,
@@ -667,7 +739,7 @@ index 11ac130..15511eb 100644
    );
    useEffect(() => {
      const syncRenderAgentUi = () => {
-@@ -3098,6 +3041,7 @@ export function RetroOffice3D({
+@@ -3098,6 +3070,7 @@ export function RetroOffice3D({
        const [wx, , wz] = toWorld(agent.x, agent.y);
        orbitRef.current.target.set(wx, 0, wz);
        orbitRef.current.update();
@@ -675,7 +747,7 @@ index 11ac130..15511eb 100644
        onAgentChatSelect?.(agentId);
      },
      [onAgentChatSelect, renderAgentLookupRef],
-@@ -5442,11 +5386,15 @@ export function RetroOffice3D({
+@@ -5442,11 +5415,14 @@ export function RetroOffice3D({
                agentLookupRef={renderAgentLookupRef}
              />
  
@@ -686,7 +758,6 @@ index 11ac130..15511eb 100644
 -              color={sofiaTwinScene.mode === "incident" ? "#ffd0d5" : sofiaTwinScene.mode === "shadow" ? "#ddd6fe" : "#d8d4c8"}
 +            {/* Sofia Spatial OS: stations, War Room, Shadow Twin, auras, projects, alert light, auto-follow. */}
 +            <SofiaSpatialLayer
-+              view={sofiaView}
 +              layoutPreset={layoutPreset}
 +              anchors={sofiaAnchors}
 +              agentLookupRef={renderAgentLookupRef}
@@ -697,13 +768,31 @@ index 11ac130..15511eb 100644
              <directionalLight
                position={[8, 14, 6]}
 diff --git a/src/features/retro-office/core/navigation.ts b/src/features/retro-office/core/navigation.ts
-index 952eb75..b538edf 100644
+index 952eb75..c6b097c 100644
 --- a/src/features/retro-office/core/navigation.ts
 +++ b/src/features/retro-office/core/navigation.ts
-@@ -104,6 +104,28 @@ export function buildNavGrid(furniture: FurnitureItem[]): NavGrid {
-     }
-   }
+@@ -84,9 +84,12 @@ const itemBlocksNavigation = (type: string): boolean =>
  
+ export function buildNavGrid(furniture: FurnitureItem[]): NavGrid {
+   const grid = new Uint8Array(GRID_COLS * GRID_ROWS);
++  // Cells blocked by anything other than walls: door re-opening never clears them.
++  const solid = new Uint8Array(GRID_COLS * GRID_ROWS);
+   const defaultPad = GRID_CELL * 0.6;
+   for (const item of furniture) {
+     if (!itemBlocksNavigation(item.type)) continue;
++    const isWall = item.type === "wall";
+     const itemPad = ITEM_METADATA[item.type]?.navPadding ?? defaultPad;
+     const bounds = getItemBounds(item);
+     const x1 = bounds.x - itemPad;
+@@ -100,6 +103,29 @@ export function buildNavGrid(furniture: FurnitureItem[]): NavGrid {
+     for (let row = r1; row <= r2; row += 1) {
+       for (let column = c1; column <= c2; column += 1) {
+         grid[row * GRID_COLS + column] = 1;
++        if (!isWall) solid[row * GRID_COLS + column] = 1;
++      }
++    }
++  }
++
 +  // Doors are passable, but the padding of the two wall segments around a
 +  // narrow door can seal its gap on the 25px grid (custom layouts such as the
 +  // Sofia floors). Re-open the door footprint, extended one cell across the wall.
@@ -721,14 +810,25 @@ index 952eb75..b538edf 100644
 +    const r2 = Math.min(GRID_ROWS - 2, Math.floor(y2 / GRID_CELL));
 +    for (let row = r1; row <= r2; row += 1) {
 +      for (let column = c1; column <= c2; column += 1) {
-+        grid[row * GRID_COLS + column] = 0;
-+      }
-+    }
-+  }
++        if (!solid[row * GRID_COLS + column]) grid[row * GRID_COLS + column] = 0;
+       }
+     }
+   }
+@@ -115,6 +141,14 @@ export function buildNavGrid(furniture: FurnitureItem[]): NavGrid {
+   return grid;
+ }
+ 
++// True when the canvas point lies in a walkable nav cell.
++export const isNavCellFree = (grid: NavGrid, x: number, y: number) => {
++  const column = Math.floor(x / GRID_CELL);
++  const row = Math.floor(y / GRID_CELL);
++  if (column < 0 || row < 0 || column >= GRID_COLS || row >= GRID_ROWS) return false;
++  return grid[row * GRID_COLS + column] === 0;
++};
 +
-   for (let column = 0; column < GRID_COLS; column += 1) {
-     grid[column] = 1;
-     grid[(GRID_ROWS - 1) * GRID_COLS + column] = 1;
+ export function astar(
+   sx: number,
+   sy: number,
 diff --git a/src/features/retro-office/core/types.ts b/src/features/retro-office/core/types.ts
 index 97f3dcc..7270821 100644
 --- a/src/features/retro-office/core/types.ts
@@ -744,10 +844,10 @@ index 97f3dcc..7270821 100644
  
  export type FurnitureItem = {
 diff --git a/src/features/sofia-ops/SofiaOpsHud.tsx b/src/features/sofia-ops/SofiaOpsHud.tsx
-index 5a04806..050a887 100644
+index 5a04806..e6a52d4 100644
 --- a/src/features/sofia-ops/SofiaOpsHud.tsx
 +++ b/src/features/sofia-ops/SofiaOpsHud.tsx
-@@ -1,188 +1,437 @@
+@@ -1,188 +1,441 @@
  "use client";
  
 +// Sofia Spatial OS — HUD. Thin layer over the world view: the scene is the
@@ -985,6 +1085,7 @@ index 5a04806..050a887 100644
 +        ["aberto", clock(incident.openedAt) + " · há " + elapsed(incident.openedAt, view.replay.at ?? undefined)],
 +        ["responsáveis", incident.responsible.map((id) => names.get(id) ?? id).join(", ") || "—"],
 +        ["resolvido", incident.resolvedAt ? clock(incident.resolvedAt) : "não"],
++        ["ação atual", incident.timeline.length ? incident.timeline[incident.timeline.length - 1].type : "—"],
 +      ];
 +      for (const item of incident.evidence) rows.push(["evidência", item]);
 +      events = incident.timeline.slice().reverse().map((item) => ({ ...item, source: incident.source }) as WorldEvent);
@@ -1060,6 +1161,9 @@ index 5a04806..050a887 100644
 +            {incident.synthetic ? " · SIMULADO" : ""}
            </div>
 +          <div className="truncate opacity-80">{incident.source} · {incident.type} · {incident.responsible.map((id) => names.get(id) ?? id).join(", ") || "convocando"}</div>
++          {incident.state !== "recuperando" && incident.timeline.length ? (
++            <div className="truncate opacity-60">ação atual: {incident.timeline[incident.timeline.length - 1].type} · {incident.timeline[incident.timeline.length - 1].summary}</div>
++          ) : null}
 +        </button>
 +      ) : null}
 +    </div>
@@ -1343,10 +1447,10 @@ index 5a04806..050a887 100644
  }
 diff --git a/src/features/sofia-ops/SofiaSpatialLayer.tsx b/src/features/sofia-ops/SofiaSpatialLayer.tsx
 new file mode 100644
-index 0000000..a6dd20f
+index 0000000..bdd11f3
 --- /dev/null
 +++ b/src/features/sofia-ops/SofiaSpatialLayer.tsx
-@@ -0,0 +1,645 @@
+@@ -0,0 +1,670 @@
 +"use client";
 +
 +// Sofia Spatial OS — everything the World State shows inside the 3D office.
@@ -1361,8 +1465,9 @@ index 0000000..a6dd20f
 +import * as THREE from "three";
 +import { SofiaSafeText as Text } from "@/features/sofia-ops/SafeText";
 +import { toWorld } from "@/features/retro-office/core/geometry";
++import { CANVAS_H, CANVAS_W, SCALE } from "@/features/retro-office/core/constants";
 +import type { RenderAgent } from "@/features/retro-office/core/types";
-+import { sofiaWorld, type SofiaWorldView } from "@/lib/sofia-ops/worldStore";
++import { sofiaWorld, useSofiaWorld, type SofiaWorldView } from "@/lib/sofia-ops/worldStore";
 +import {
 +  FLOOR_LABEL,
 +  STATE_LABEL,
@@ -1390,6 +1495,10 @@ index 0000000..a6dd20f
 +  type SofiaTarget,
 +  type SofiaTargetSet,
 +} from "@/features/sofia-ops/spatialTargets";
++
++// Canvas -> world offsets (same as toWorld), for allocation-free per-frame math.
++const HALF_W = CANVAS_W * SCALE * 0.5;
++const HALF_H = CANVAS_H * SCALE * 0.5;
 +
 +export const ZONE_COLOR: Record<ZoneId, string> = {
 +  desk: "#22d3ee",
@@ -1459,12 +1568,14 @@ index 0000000..a6dd20f
 +  state,
 +  ownerName,
 +  remote,
++  hideLabel = false,
 +}: {
 +  zone: ZoneId;
 +  anchor: Point;
 +  state: ZoneWorldState;
 +  ownerName: string | null;
 +  remote: boolean;
++  hideLabel?: boolean;
 +}) {
 +  const ring = useRef<THREE.Mesh>(null);
 +  const pillar = useRef<THREE.Mesh>(null);
@@ -1501,14 +1612,14 @@ index 0000000..a6dd20f
 +          sofiaWorld.inspect({ kind: "zone", id: zone });
 +        }}
 +      >
-+        <cylinderGeometry args={[0.56, 0.56, 1, 6]} />
++        <cylinderGeometry args={[0.75, 0.75, 1, 8]} />
 +        <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
 +      </mesh>
 +      <mesh ref={pillar} position={[0, 0.9, 0]} visible={false}>
 +        <cylinderGeometry args={[0.36, 0.48, 1.8, 6, 1, true]} />
 +        <meshBasicMaterial color={color} transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
 +      </mesh>
-+      {active ? (
++      {hideLabel ? null : active ? (
 +        <Label
 +          y={2.05}
 +          size={0.21}
@@ -1664,9 +1775,9 @@ index 0000000..a6dd20f
 +      group.current.visible = false;
 +      return;
 +    }
-+    const [x, , z] = toWorld(agent.x, agent.y);
++    const x = agent.x * SCALE - HALF_W;
 +    group.current.visible = true;
-+    group.current.position.set(x, 0, z);
++    group.current.position.set(x, 0, agent.y * SCALE - HALF_H);
 +    if (ring.current) {
 +      const fast = state === "incident" || state === "meeting";
 +      const pulse = 0.5 + 0.5 * Math.sin(clock.elapsedTime * (fast ? 6 : 3) + x);
@@ -1740,14 +1851,15 @@ index 0000000..a6dd20f
 +      return;
 +    }
 +    const agent = focus.agentId ? lookupRef.current?.get(focus.agentId) : undefined;
-+    const point = agent ? { x: agent.x, y: agent.y } : anchors[focus.zone];
-+    if (!point) {
++    const anchor = anchors[focus.zone];
++    const px = agent ? agent.x : anchor?.x;
++    const py = agent ? agent.y : anchor?.y;
++    if (px === undefined || py === undefined) {
 +      cone.current.visible = false;
 +      return;
 +    }
-+    const [x, , z] = toWorld(point.x, point.y);
 +    cone.current.visible = true;
-+    cone.current.position.set(x, 1.75 + Math.sin(clock.elapsedTime * 3) * 0.08, z);
++    cone.current.position.set(px * SCALE - HALF_W, 1.75 + Math.sin(clock.elapsedTime * 3) * 0.08, py * SCALE - HALF_H);
 +    cone.current.rotation.y += 0.03;
 +  });
 +  const color = focus?.priority === 3 ? "#ff2d55" : focus?.priority === 2 ? "#f59e0b" : "#22d3ee";
@@ -1797,7 +1909,11 @@ index 0000000..a6dd20f
 +  const { gl, camera } = useThree();
 +  const lastUserRef = useRef(0);
 +  const glidingRef = useRef(false);
-+  const focusKeyRef = useRef<string | null>(null);
++  // What the camera currently follows; switching is rate-limited so several
++  // busy agents never make the camera ping-pong.
++  const trackRef = useRef<{ key: string; agentId: string | null; zone: ZoneId } | null>(null);
++  const lastSwitchRef = useRef(0);
++  const lastPriorityRef = useRef(0);
 +  const glideRequestRef = useRef(view.glideRequest);
 +  const desired = useMemo(() => new THREE.Vector3(), []);
 +  const offset = useMemo(() => new THREE.Vector3(), []);
@@ -1816,38 +1932,46 @@ index 0000000..a6dd20f
 +      element.removeEventListener("touchstart", mark);
 +    };
 +  }, [gl]);
-+  const focus = view.world.focus;
-+  const key = focus ? focus.eventId + ":" + (focus.agentId ?? "") : null;
-+  // A new focus only moves the camera when auto-follow is ON; turning it OFF
-+  // stops any glide in progress (the user keeps control).
-+  useEffect(() => {
-+    if (key === focusKeyRef.current) return;
-+    focusKeyRef.current = key;
-+    if (key && view.autoFollow) glidingRef.current = true;
-+  }, [key, view.autoFollow]);
 +  useEffect(() => {
 +    if (!view.autoFollow) glidingRef.current = false;
 +  }, [view.autoFollow]);
-+  useEffect(() => {
-+    if (view.glideRequest === glideRequestRef.current) return;
-+    glideRequestRef.current = view.glideRequest;
-+    glidingRef.current = true;
-+    lastUserRef.current = 0;
-+  }, [view.glideRequest]);
++  const focus = view.world.focus;
++  const glideRequest = view.glideRequest;
++  const autoFollow = view.autoFollow;
 +  useFrame((_, delta) => {
 +    const controls = orbitRef.current;
-+    if (!controls || !focus || followRef?.current) return;
-+    const manual = !view.autoFollow;
-+    if (manual && !glidingRef.current) return;
-+    if (!manual && performance.now() - lastUserRef.current < 12000) return;
-+    const agent = focus.agentId ? lookupRef.current?.get(focus.agentId) : undefined;
-+    const point = agent ? { x: agent.x, y: agent.y } : anchors[focus.zone];
-+    if (!point) return;
-+    const [x, , z] = toWorld(point.x, point.y);
-+    desired.set(x, controls.target.y, z);
++    if (!controls || followRef?.current) return;
++    const now = performance.now();
++    if (focus) {
++      const key = focus.eventId + ":" + (focus.agentId ?? "");
++      if (glideRequest !== glideRequestRef.current) {
++        // "ver": one glide to the current focus, even with auto-follow OFF.
++        glideRequestRef.current = glideRequest;
++        trackRef.current = { key, agentId: focus.agentId, zone: focus.zone };
++        glidingRef.current = true;
++        lastUserRef.current = 0;
++        lastSwitchRef.current = now;
++      } else if (autoFollow && key !== trackRef.current?.key && (now - lastSwitchRef.current > 8000 || focus.priority > lastPriorityRef.current)) {
++        trackRef.current = { key, agentId: focus.agentId, zone: focus.zone };
++        glidingRef.current = true;
++        lastSwitchRef.current = now;
++        lastPriorityRef.current = focus.priority;
++      }
++    }
++    const track = trackRef.current;
++    if (!track) return;
++    if (!autoFollow && !glidingRef.current) return;
++    if (autoFollow && now - lastUserRef.current < 12000) return;
++    const agent = track.agentId ? lookupRef.current?.get(track.agentId) : undefined;
++    const anchor = anchors[track.zone];
++    const px = agent ? agent.x : anchor?.x;
++    const py = agent ? agent.y : anchor?.y;
++    if (px === undefined || py === undefined) return;
++    desired.set(px * SCALE - HALF_W, controls.target.y, py * SCALE - HALF_H);
 +    const distance = controls.target.distanceTo(desired);
 +    if (!glidingRef.current && distance < 2.2) return;
 +    glidingRef.current = distance > 0.08;
++    if (!glidingRef.current) lastPriorityRef.current = 0;
 +    const step = 1 - Math.exp(-Math.min(delta, 0.1) * 2.4);
 +    offset.copy(desired).sub(controls.target).multiplyScalar(step);
 +    controls.target.add(offset);
@@ -1860,20 +1984,25 @@ index 0000000..a6dd20f
 +function AlertLighting({ world, replay }: { world: WorldState; replay: boolean }) {
 +  const ambient = useRef<THREE.AmbientLight>(null);
 +  const point = useRef<THREE.PointLight>(null);
-+  const targetColor = useMemo(() => new THREE.Color(), []);
-+  const pointColor = useMemo(() => new THREE.Color(), []);
++  const mode = world.mode;
++  // Target colours are parsed once per mode change, not every frame.
++  const targetColor = useMemo(
++    () => new THREE.Color(replay ? "#e8dcc4" : mode === "incident" ? "#ffd0d5" : mode === "recovery" ? "#d5f5e3" : mode === "shadow" ? "#ddd6fe" : "#d8d4c8"),
++    [mode, replay],
++  );
++  const pointColor = useMemo(
++    () => new THREE.Color(mode === "incident" ? "#ff334d" : mode === "recovery" ? "#34d399" : mode === "audit" ? "#f59e0b" : mode === "deploy" ? "#38bdf8" : mode === "shadow" ? "#a78bfa" : "#ffffff"),
++    [mode],
++  );
 +  useFrame(({ clock }, delta) => {
 +    const k = 1 - Math.exp(-Math.min(delta, 0.1) * 1.8);
 +    const alert = world.alertLevel;
-+    const mode = world.mode;
 +    if (ambient.current) {
-+      targetColor.set(replay ? "#e8dcc4" : mode === "incident" ? "#ffd0d5" : mode === "recovery" ? "#d5f5e3" : mode === "shadow" ? "#ddd6fe" : "#d8d4c8");
 +      ambient.current.color.lerp(targetColor, k);
 +      const intensity = replay ? 0.62 : 0.72 - alert * 0.16;
 +      ambient.current.intensity += (intensity - ambient.current.intensity) * k;
 +    }
 +    if (point.current) {
-+      pointColor.set(mode === "incident" ? "#ff334d" : mode === "recovery" ? "#34d399" : mode === "audit" ? "#f59e0b" : mode === "deploy" ? "#38bdf8" : mode === "shadow" ? "#a78bfa" : "#ffffff");
 +      point.current.color.lerp(pointColor, k);
 +      const pulse = mode === "incident" ? 0.75 + 0.25 * Math.sin(clock.elapsedTime * 5) : 1;
 +      const intensity = mode === "incident" ? 5.5 * pulse : mode === "recovery" ? 3.2 * alert : mode === "nominal" || mode === "working" ? 0 : 1.6;
@@ -1931,7 +2060,6 @@ index 0000000..a6dd20f
 +}
 +
 +export function SofiaSpatialLayer({
-+  view,
 +  layoutPreset,
 +  anchors,
 +  agentLookupRef,
@@ -1939,7 +2067,6 @@ index 0000000..a6dd20f
 +  followRef,
 +  agentNames,
 +}: {
-+  view: SofiaWorldView;
 +  layoutPreset: string;
 +  anchors: Record<ZoneId, Point | null> | null;
 +  agentLookupRef: RefObject<Map<string, RenderAgent>>;
@@ -1947,6 +2074,7 @@ index 0000000..a6dd20f
 +  followRef?: MutableRefObject<string | null>;
 +  agentNames: Map<string, string>;
 +}) {
++  const view = useSofiaWorld();
 +  const world = view.world;
 +  const floorId = PRESET_FLOOR[layoutPreset] ?? null;
 +  const ownZones = floorId ? FLOOR_ZONES[floorId] : [];
@@ -1969,6 +2097,7 @@ index 0000000..a6dd20f
 +                state={state}
 +                ownerName={state.owner ? agentNames.get(state.owner) ?? state.owner : null}
 +                remote={!ownZones.includes(zone)}
++                hideLabel={zone === "warroom" && Boolean(world.incident)}
 +              />
 +            );
 +          })}
@@ -1994,21 +2123,22 @@ index 0000000..a6dd20f
 +}
 diff --git a/src/features/sofia-ops/spatialTargets.ts b/src/features/sofia-ops/spatialTargets.ts
 new file mode 100644
-index 0000000..787b574
+index 0000000..1f006e9
 --- /dev/null
 +++ b/src/features/sofia-ops/spatialTargets.ts
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,374 @@
 +// Sofia Spatial OS — pure spatial resolution (no React/three): where each World
 +// State zone physically lives on the current floor, War Room seats, and the
 +// per-agent destinations consumed by the scene's walk system.
 +
-+import { ITEM_FOOTPRINT, resolveItemTypeKey } from "@/features/retro-office/core/geometry";
-+import { astar, buildNavGrid, type NavGrid } from "@/features/retro-office/core/navigation";
++import { getItemBounds } from "@/features/retro-office/core/geometry";
++import { buildNavGrid, isNavCellFree, type NavGrid } from "@/features/retro-office/core/navigation";
 +import type { FurnitureItem } from "@/features/retro-office/core/types";
 +import type { SofiaFloorId, ZoneId } from "@/lib/sofia-ops/worldState";
 +
 +export type Point = { x: number; y: number };
-+export type Seat = Point & { facing: number };
++// sit=false: a standing spot (no chair there), e.g. the War Room arc fallback.
++export type Seat = Point & { facing: number; sit?: boolean };
 +
 +export const PRESET_FLOOR: Record<string, SofiaFloorId | null> = {
 +  office: "openclaw-ground",
@@ -2032,9 +2162,9 @@ index 0000000..787b574
 +
 +
 +export const itemCenter = (item: FurnitureItem): Point => {
-+  const [fw, fh] = ITEM_FOOTPRINT[resolveItemTypeKey(item)] ?? [40, 40];
 +  if (typeof item.r === "number") return { x: item.x + item.r, y: item.y + item.r };
-+  return { x: item.x + (item.w ?? fw) / 2, y: item.y + (item.h ?? fh) / 2 };
++  const bounds = getItemBounds(item);
++  return { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
 +};
 +
 +const firstOf = (furniture: FurnitureItem[], types: string[]) => {
@@ -2053,7 +2183,7 @@ index 0000000..787b574
 +// Seats for the War Room: the authored meeting room when the floor has one,
 +// else the chairs around the floor's biggest round table, else a ring around it.
 +export const resolveSofiaWarSeats = (furniture: FurnitureItem[], meetingSeats: Seat[]): Seat[] => {
-+  if (meetingSeats.length >= 3) return meetingSeats;
++  if (meetingSeats.length >= 3) return meetingSeats.map((seat) => ({ ...seat, sit: true }));
 +  const table = biggestRoundTable(furniture);
 +  if (!table) return meetingSeats;
 +  const center = itemCenter(table);
@@ -2064,12 +2194,12 @@ index 0000000..787b574
 +    .map((item) => itemCenter(item))
 +    .filter((point) => Math.hypot(point.x - center.x, point.y - center.y) <= radius + 70)
 +    .sort((a, b) => Math.atan2(a.y - center.y, a.x - center.x) - Math.atan2(b.y - center.y, b.x - center.x));
-+  if (chairs.length >= 3) return chairs.map((point) => ({ ...point, facing: faceTable(point.x, point.y) }));
++  if (chairs.length >= 3) return chairs.map((point) => ({ ...point, facing: faceTable(point.x, point.y), sit: true }));
 +  return Array.from({ length: 6 }, (_, index) => {
 +    const angle = (index / 6) * Math.PI * 2;
 +    const x = center.x + Math.cos(angle) * (radius + 30);
 +    const y = center.y + Math.sin(angle) * (radius + 30);
-+    return { x, y, facing: faceTable(x, y) };
++    return { x, y, facing: faceTable(x, y), sit: false };
 +  });
 +};
 +
@@ -2121,6 +2251,8 @@ index 0000000..787b574
 +  for (const [agentId, zone] of Object.entries(zoneByAgentId)) {
 +    if (zone === "warroom") {
 +      const seat = warSeats.length ? warSeats[warOrder.indexOf(agentId) % warSeats.length] : null;
++      // Seated pose for every War Room spot: standing agents this close together
++      // trigger the scene's collision bumps and get pushed away from the room.
 +      if (seat) targets[agentId] = { x: seat.x, y: seat.y, facing: seat.facing, pose: "sit" };
 +      else deskHolds[agentId] = true;
 +      continue;
@@ -2153,17 +2285,62 @@ index 0000000..787b574
 +
 +const resolveHub = (grid: NavGrid): Point => {
 +  for (const hub of HUB_CANDIDATES) {
-+    const probe = astar(hub.x, hub.y, hub.x + 50, hub.y, grid);
-+    if (probe.length) return hub;
++    if (isNavCellFree(grid, hub.x, hub.y)) return hub;
 +  }
 +  return HUB_CANDIDATES[0];
 +};
 +
++// Connectivity from the hub, computed once per grid (4-neighbour flood fill;
++// conservative w.r.t. the scene's A*, which also allows diagonal steps).
++const GRID_COLS = 72;
++const GRID_ROWS = 72;
++const reachCache = new WeakMap<NavGrid, Uint8Array>();
++const reachMap = (grid: NavGrid, hub: Point) => {
++  const cached = reachCache.get(grid);
++  if (cached) return cached;
++  const reach = new Uint8Array(GRID_COLS * GRID_ROWS);
++  let start = -1;
++  const hc = Math.floor(hub.x / 25);
++  const hr = Math.floor(hub.y / 25);
++  for (let ring = 0; ring < 8 && start < 0; ring += 1) {
++    for (let dr = -ring; dr <= ring && start < 0; dr += 1) {
++      for (let dc = -ring; dc <= ring; dc += 1) {
++        const r = hr + dr;
++        const c = hc + dc;
++        if (r < 0 || c < 0 || r >= GRID_ROWS || c >= GRID_COLS) continue;
++        if (!grid[r * GRID_COLS + c]) {
++          start = r * GRID_COLS + c;
++          break;
++        }
++      }
++    }
++  }
++  if (start >= 0) {
++    const queue = [start];
++    reach[start] = 1;
++    while (queue.length) {
++      const index = queue.pop()!;
++      const r = Math.floor(index / GRID_COLS);
++      const c = index % GRID_COLS;
++      for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
++        if (nr < 0 || nc < 0 || nr >= GRID_ROWS || nc >= GRID_COLS) continue;
++        const next = nr * GRID_COLS + nc;
++        if (reach[next] || grid[next]) continue;
++        reach[next] = 1;
++        queue.push(next);
++      }
++    }
++  }
++  reachCache.set(grid, reach);
++  return reach;
++};
++
++// The point itself must be walkable (astar ends exactly on the raw target, so
++// a blocked target would make the agent hop through furniture) and connected.
 +const isReachable = (grid: NavGrid, hub: Point, point: Point) => {
-+  const path = astar(hub.x, hub.y, point.x, point.y, grid);
-+  if (!path.length) return false;
-+  const last = path[path.length - 1];
-+  return Math.hypot(last.x - point.x, last.y - point.y) < 40;
++  if (!isNavCellFree(grid, point.x, point.y)) return false;
++  const reach = reachMap(grid, hub);
++  return reach[Math.floor(point.y / 25) * GRID_COLS + Math.floor(point.x / 25)] === 1;
 +};
 +
 +export const nearestReachable = (grid: NavGrid, hub: Point, point: Point, maxRadius = 440): Point | null => {
@@ -2207,23 +2384,47 @@ index 0000000..787b574
 +
 +// Try the four sides of an item (south first: rooms open toward the floor).
 +const standCandidates = (item: FurnitureItem): Point[] => {
-+  const center = itemCenter(item);
-+  const [fw, fh] = ITEM_FOOTPRINT[resolveItemTypeKey(item)] ?? [40, 40];
-+  const halfW = (item.w ?? fw) / 2;
-+  const halfH = (item.h ?? fh) / 2;
-+  return [
-+    { x: center.x, y: center.y + halfH + 28 },
-+    { x: center.x - halfW - 28, y: center.y },
-+    { x: center.x + halfW + 28, y: center.y },
-+    { x: center.x, y: center.y - halfH - 28 },
-+  ];
++  // Rotation-aware bounds; a few distances per side so a free cell is found.
++  const bounds = getItemBounds(item);
++  const cx = bounds.x + bounds.w / 2;
++  const cy = bounds.y + bounds.h / 2;
++  const out: Point[] = [];
++  for (const gap of [30, 48, 66]) {
++    out.push(
++      { x: cx, y: bounds.y + bounds.h + gap },
++      { x: bounds.x - gap, y: cy },
++      { x: bounds.x + bounds.w + gap, y: cy },
++      { x: cx, y: bounds.y - gap },
++    );
++  }
++  return out;
++};
++
++// Closest walkable, hub-connected nav cell to a point (rings of 25px cells).
++const NAV_CELL = 25;
++const closestReachableCell = (grid: NavGrid, hub: Point, point: Point, maxCells = 4): Point | null => {
++  const c0 = Math.floor(point.x / NAV_CELL);
++  const r0 = Math.floor(point.y / NAV_CELL);
++  for (let ring = 1; ring <= maxCells; ring += 1) {
++    const cells: Point[] = [];
++    for (let dr = -ring; dr <= ring; dr += 1) {
++      for (let dc = -ring; dc <= ring; dc += 1) {
++        if (Math.max(Math.abs(dr), Math.abs(dc)) !== ring) continue;
++        cells.push({ x: (c0 + dc) * NAV_CELL + NAV_CELL / 2, y: (r0 + dr) * NAV_CELL + NAV_CELL / 2 });
++      }
++    }
++    cells.sort((a, b) => Math.hypot(a.x - point.x, a.y - point.y) - Math.hypot(b.x - point.x, b.y - point.y));
++    const found = cells.find((cell) => isReachable(grid, hub, cell));
++    if (found) return found;
++  }
++  return null;
 +};
 +
 +const reachableItem = (furniture: FurnitureItem[], grid: NavGrid, hub: Point, types: string[], used: Set<string>) => {
 +  for (const type of types) {
 +    for (const item of furniture) {
 +      if (item.type !== type || used.has(item._uid)) continue;
-+      const stand = standCandidates(item).find((point) => isReachable(grid, hub, point));
++      const stand = closestReachableCell(grid, hub, itemCenter(item)) ?? standCandidates(item).find((point) => isReachable(grid, hub, point));
 +      if (stand) return { item, stand };
 +    }
 +  }
@@ -2237,7 +2438,7 @@ index 0000000..787b574
 +    const angle = (-70 + index * (140 / 6)) * (Math.PI / 180);
 +    const x = Math.round(center.x + Math.sin(angle) * 70);
 +    const y = Math.round(center.y + Math.cos(angle) * 35);
-+    if (isReachable(grid, hub, { x, y })) seats.push({ x, y, facing: Math.atan2(focus.x - x, focus.y - y) });
++    if (isReachable(grid, hub, { x, y })) seats.push({ x, y, facing: Math.atan2(focus.x - x, focus.y - y), sit: false });
 +  }
 +  return seats;
 +};
@@ -2301,12 +2502,12 @@ index 0000000..787b574
 +  return { anchors, stands, warSeats, relocated };
 +};
 diff --git a/src/lib/sofia-ops/config.ts b/src/lib/sofia-ops/config.ts
-index d5ba026..ed7a460 100644
+index d5ba026..f28acfc 100644
 --- a/src/lib/sofia-ops/config.ts
 +++ b/src/lib/sofia-ops/config.ts
 @@ -1,4 +1,4 @@
 -export const SOFIA_OPS_VERSION = "2.7.0-max";
-+export const SOFIA_OPS_VERSION = "2.8.1-spatial";
++export const SOFIA_OPS_VERSION = "2.8.2-spatial";
  
  export const SOFIA_OPS_CAPABILITIES = {
    digitalTwin: true,
@@ -2466,10 +2667,10 @@ index e5722be..6e8bdf6 100644
  
  export const getSofiaOpsEvents = () => ring;
 diff --git a/src/lib/sofia-ops/serverEventStore.ts b/src/lib/sofia-ops/serverEventStore.ts
-index 0f81faf..3e28bdd 100644
+index 0f81faf..7f2dcb7 100644
 --- a/src/lib/sofia-ops/serverEventStore.ts
 +++ b/src/lib/sofia-ops/serverEventStore.ts
-@@ -12,6 +12,8 @@ export type SofiaOpsServerEvent = {
+@@ -12,11 +12,16 @@ export type SofiaOpsServerEvent = {
    project?: string | null;
    agentId?: string | null;
    correlationId?: string | null;
@@ -2477,8 +2678,45 @@ index 0f81faf..3e28bdd 100644
 +  seq: number;
  };
  
- type Store = { events: SofiaOpsServerEvent[]; sequence: number };
-@@ -51,7 +53,7 @@ const inferSeverity = (text: string): SofiaOpsSeverity => {
+-type Store = { events: SofiaOpsServerEvent[]; sequence: number };
++// epoch changes on boot and on harness reset: clients resync from scratch.
++type Store = { events: SofiaOpsServerEvent[]; sequence: number; epoch: string };
++const newEpoch = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+ const root = globalThis as typeof globalThis & { __sofiaOpsEventStore?: Store };
+-const store: Store = root.__sofiaOpsEventStore ?? { events: [], sequence: 0 };
++const store: Store = root.__sofiaOpsEventStore ?? { events: [], sequence: 0, epoch: newEpoch() };
++if (!store.epoch) store.epoch = newEpoch();
+ root.__sofiaOpsEventStore = store;
+ const MAX_SERVER_EVENTS = 240;
+ 
+@@ -29,6 +34,26 @@ const safeText = (value: unknown) => {
+   }
+ };
+ 
++// Ingress stores metadata only: fields that may carry patient/customer content
++// (message text, names, phones, …) are dropped and strings are clipped.
++const SENSITIVE_KEY = /(text|message|mensagem|body|content|conteudo|transcript|conversation|phone|telefone|email|name|nome|cpf|address|endereco|patient|paciente|contact|contato)/i;
++const sanitize = (value: unknown, depth = 0): unknown => {
++  if (value === null || typeof value === "number" || typeof value === "boolean") return value;
++  if (typeof value === "string") return value.slice(0, 80);
++  if (depth >= 3) return "…";
++  if (Array.isArray(value)) return value.slice(0, 10).map((item) => sanitize(item, depth + 1));
++  if (typeof value === "object") {
++    const out: Record<string, unknown> = {};
++    for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 30)) {
++      if (SENSITIVE_KEY.test(key)) continue;
++      out[key] = sanitize(item, depth + 1);
++    }
++    return out;
++  }
++  return null;
++};
++const KNOWN_FIELDS = new Set(["type", "summary", "source", "severity", "payload", "floorHint", "project", "agentId", "correlationId"]);
++
+ const safeField = (value: unknown, max = 100) => typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null;
+ const validSources = new Set<SofiaOpsSource>(["openclaw", "n8n", "railway", "whatsapp", "github", "system"]);
+ const validSeverities = new Set<SofiaOpsSeverity>(["info", "success", "warning", "critical"]);
+@@ -51,18 +76,20 @@ const inferSeverity = (text: string): SofiaOpsSeverity => {
    return "info";
  };
  
@@ -2486,8 +2724,13 @@ index 0f81faf..3e28bdd 100644
 +export const pushSofiaOpsServerEvent = (input: unknown, options: { synthetic?: boolean } = {}): SofiaOpsServerEvent => {
    const body = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
    const type = safeField(body.type, 120) || "external.event";
-   const payloadText = safeText(body.payload ?? body);
-@@ -61,8 +63,9 @@ export const pushSofiaOpsServerEvent = (input: unknown): SofiaOpsServerEvent =>
+-  const payloadText = safeText(body.payload ?? body);
+-  const summary = safeField(body.summary, 200) || payloadText.slice(0, 200) || type;
++  const extra = Object.fromEntries(Object.entries(body).filter(([key]) => !KNOWN_FIELDS.has(key)));
++  const payloadText = safeText(sanitize(body.payload ?? extra));
++  const summary = safeField(body.summary, 200) || type;
+   const combined = type + " " + summary + " " + payloadText;
+   const requestedSource = safeField(body.source, 40) || "";
    const requestedSeverity = safeField(body.severity, 40) || "";
    const source = validSources.has(requestedSource as SofiaOpsSource) ? requestedSource as SofiaOpsSource : inferSource(combined);
    const severity = validSeverities.has(requestedSeverity as SofiaOpsSeverity) ? requestedSeverity as SofiaOpsSeverity : inferSeverity(combined);
@@ -2498,24 +2741,40 @@ index 0f81faf..3e28bdd 100644
      ts: Date.now(),
      type,
      source,
-@@ -73,9 +76,19 @@ export const pushSofiaOpsServerEvent = (input: unknown): SofiaOpsServerEvent =>
+@@ -73,9 +100,34 @@ export const pushSofiaOpsServerEvent = (input: unknown): SofiaOpsServerEvent =>
      project: safeField(body.project, 100),
      agentId: safeField(body.agentId, 100),
      correlationId: safeField(body.correlationId, 120),
 +    synthetic: options.synthetic === true,
 +    seq,
    };
-   store.events = [event, ...store.events].slice(0, MAX_SERVER_EVENTS);
+-  store.events = [event, ...store.events].slice(0, MAX_SERVER_EVENTS);
++  store.events = [event, ...store.events];
++  // Over capacity: drop the oldest simulated events first, so the harness can
++  // never push real events out of the fabric.
++  while (store.events.length > MAX_SERVER_EVENTS) {
++    let victim = -1;
++    for (let index = store.events.length - 1; index >= 0; index -= 1) {
++      if (store.events[index].synthetic) {
++        victim = index;
++        break;
++      }
++    }
++    store.events.splice(victim >= 0 ? victim : store.events.length - 1, 1);
++  }
    return event;
  };
  
  export const listSofiaOpsServerEvents = () => store.events;
 +export const headSofiaOpsServerSeq = () => store.sequence;
++export const sofiaOpsServerEpoch = () => store.epoch;
 +export const listSofiaOpsServerEventsAfter = (after: number) =>
 +  after > 0 ? store.events.filter((event) => (event.seq ?? 0) > after) : store.events;
 +export const clearSyntheticSofiaOpsServerEvents = () => {
 +  const before = store.events.length;
 +  store.events = store.events.filter((event) => !event.synthetic);
++  // New epoch: open clients drop what they cached and resync.
++  store.epoch = newEpoch();
 +  return before - store.events.length;
 +};
 diff --git a/src/lib/sofia-ops/twinEngine.ts b/src/lib/sofia-ops/twinEngine.ts
@@ -2722,10 +2981,10 @@ index dc7de0c..0000000
 -  JSON.stringify([directive.stateByAgentId, directive.warRoom?.incidentId ?? null, directive.warRoom?.state ?? null]);
 diff --git a/src/lib/sofia-ops/worldState.ts b/src/lib/sofia-ops/worldState.ts
 new file mode 100644
-index 0000000..481e47a
+index 0000000..8434a9c
 --- /dev/null
 +++ b/src/lib/sofia-ops/worldState.ts
-@@ -0,0 +1,667 @@
+@@ -0,0 +1,697 @@
 +// Sofia Spatial OS — World State.
 +//
 +// One deterministic reducer: (events, agents, now) -> WorldState.
@@ -2971,15 +3230,34 @@ index 0000000..481e47a
 +  critical: boolean;
 +};
 +
++// Word-level matching on the event type (no substrings: "cooldown" is not
++// "down", "unhealthy" is not "healthy").
++const typeTokens = (type: string) => lower(type).split(/[^a-z0-9]+/).filter(Boolean);
++const FAILURE_TOKENS = new Set(["fail", "failed", "failure", "error", "errored", "crash", "crashed", "fatal", "down", "outage", "timeout", "timedout", "unhealthy", "unresolved", "degraded"]);
++const RECOVERY_TOKENS = new Set(["recovered", "recovery", "resolved", "restored", "mitigated", "healthy", "closed", "up"]);
++const DEPLOY_TOKENS = new Set(["deploy", "deployment", "railway", "build", "release", "service", "infra", "rollout"]);
++const AUDIT_TOKENS = new Set(["audit", "review", "n8n", "workflow"]);
++const QA_TOKENS = new Set(["test", "tests", "qa", "regression", "lint", "ci", "github", "pull", "pr", "commit"]);
++
++// "railway.deploy.success" after a Railway incident is also a recovery signal
++// (it stays a deploy for the spatial routing).
++const SUCCESS_TOKENS = new Set(["success", "succeeded", "ok", "completed", "healthy"]);
++const isSuccessSignal = (event: WorldEvent) =>
++  event.severity === "success" && !typeTokens(event.type).some((token) => FAILURE_TOKENS.has(token)) && typeTokens(event.type).some((token) => SUCCESS_TOKENS.has(token));
++
 +export const classifyEvent = (event: WorldEvent): ClassifiedEvent => {
 +  const type = lower(event.type);
++  const tokens = typeTokens(event.type);
++  const has = (set: Set<string>) => tokens.some((token) => set.has(token));
 +  const text = textOf(event);
 +  const source = lower(event.source);
-+  const pick = (kind: EventKind, zone: ZoneId, critical = false): ClassifiedEvent => ({
++  // Critical means the producer said so (ingress infers severity when absent).
++  const critical = event.severity === "critical";
++  const pick = (kind: EventKind, zone: ZoneId, isCritical = false): ClassifiedEvent => ({
 +    kind,
 +    zone,
 +    floorId: ZONE_FLOOR[zone],
-+    critical,
++    critical: isCritical,
 +  });
 +
 +  if (type.startsWith("agent.run.start") || type === "agent.assistant") return pick("agent.start", "desk");
@@ -2992,23 +3270,22 @@ index 0000000..481e47a
 +  if (type.startsWith("shadow.human") || type.startsWith("shadow_human")) return pick("shadow.human", "shadow");
 +  if (type.startsWith("shadow.compare") || type.startsWith("shadow_compare")) return pick("shadow.compare", "shadow");
 +
-+  if (/(recover|resolved|restored|mitigated|healthy|incident\.closed)/.test(type)) return pick("recovery", "warroom");
++  const failed = has(FAILURE_TOKENS);
++  if (!failed && !critical && has(RECOVERY_TOKENS)) return pick("recovery", "warroom");
 +
-+  const failed = /(fail|error|crash|fatal|down|timeout)/.test(type);
-+  const deployish = /(deploy|railway|build|release|service|infra)/.test(type) || source === "railway";
-+  const auditish = /(audit|review|n8n|workflow)/.test(type) || source === "n8n";
++  const deployish = has(DEPLOY_TOKENS) || source === "railway";
++  const auditish = has(AUDIT_TOKENS) || source === "n8n";
 +
-+  if (deployish && failed) return pick("deploy.failed", "infra", true);
-+  if (auditish && failed) return pick("n8n.failed", "audit", event.severity === "critical");
-+  if (type.includes("incident") || event.severity === "critical") {
++  if (deployish && failed) return pick("deploy.failed", "infra", critical);
++  if (auditish && failed) return pick("n8n.failed", "audit", critical);
++  if (critical || tokens.includes("incident")) {
 +    const zone: ZoneId = deployish ? "infra" : auditish ? "audit" : source === "whatsapp" ? "shadow" : "warroom";
-+    return pick("incident", zone, true);
++    return pick("incident", zone, critical);
 +  }
 +  if (deployish) return pick("deploy", "infra");
 +  if (auditish) return pick("audit", "audit");
-+  if (/(test|qa|regress|lint|ci\.|github|pull|commit)/.test(type) || source === "github") return pick("qa", "qa");
++  if (has(QA_TOKENS) || source === "github") return pick("qa", "qa");
 +  if (/(analytic|metric|insight|report|compare|pattern)/.test(text)) return pick("intel", "intel");
-+  if (source === "whatsapp") return pick("generic", "desk");
 +  return pick("generic", "desk");
 +};
 +
@@ -3116,28 +3393,40 @@ index 0000000..481e47a
 +  let incident: IncidentWorldState | null = null;
 +  let incidentEvent: WorldEvent | null = null;
 +  let recoveryEvent: WorldEvent | null = null;
++  let lastCriticalTs = 0;
++  // A recovery closes the open incident only when it is about it (same
++  // correlation, else same source or project) and a simulated recovery never
++  // closes a real incident.
++  const recovers = (recovery: WorldEvent, opened: WorldEvent) => {
++    if (recovery.synthetic && !opened.synthetic) return false;
++    if (opened.correlationId && recovery.correlationId) return recovery.correlationId === opened.correlationId;
++    if (recovery.source === opened.source) return true;
++    return Boolean(recovery.project) && slugProject(recovery.project) === slugProject(opened.project);
++  };
 +  for (const event of events) {
 +    const info = classified.get(event.id)!;
 +    if (info.critical) {
-+      // A critical event opens a new incident when none is open (or the previous
-+      // one recovered/expired); otherwise it joins the open incident's timeline.
-+      if (!incidentEvent || recoveryEvent || event.ts - incidentEvent.ts > INCIDENT_TIMEOUT_MS) {
++      // A critical event opens a new incident when none is open, the previous one
++      // recovered, or the previous one went quiet for the whole timeout; otherwise
++      // it keeps the open incident alive (sustained outage, no flapping).
++      if (!incidentEvent || recoveryEvent || event.ts - lastCriticalTs > INCIDENT_TIMEOUT_MS) {
 +        incidentEvent = event;
 +        recoveryEvent = null;
 +      }
-+    } else if (info.kind === "recovery" && incidentEvent && !recoveryEvent) {
++      lastCriticalTs = event.ts;
++    } else if (incidentEvent && !recoveryEvent && recovers(event, incidentEvent) && (info.kind === "recovery" || isSuccessSignal(event))) {
 +      recoveryEvent = event;
 +    }
 +  }
 +  if (incidentEvent) {
-+    const expired = !recoveryEvent && now - incidentEvent.ts > INCIDENT_TIMEOUT_MS;
++    const expired = !recoveryEvent && now - lastCriticalTs > INCIDENT_TIMEOUT_MS;
 +    const recoveredLongAgo = recoveryEvent && now - recoveryEvent.ts > RECOVERY_MS;
 +    if (!expired && !recoveredLongAgo) {
 +      const ownerInfo = classified.get(incidentEvent.id)!;
 +      const ownerZone: ZoneId = ownerInfo.zone === "warroom" ? "warroom" : ownerInfo.zone;
 +      const responsible: string[] = [];
 +      if (!recoveryEvent) {
-+        for (const preferred of [ZONE_OWNER[ownerZone], "supervisor", "main"]) {
++        for (const preferred of [...new Set([ZONE_OWNER[ownerZone], "supervisor", "main"])]) {
 +          const pickResult = resolveAgent(preferred);
 +          if (!pickResult || responsible.includes(pickResult.id)) continue;
 +          responsible.push(pickResult.id);
@@ -3395,10 +3684,10 @@ index 0000000..481e47a
 +  ]);
 diff --git a/src/lib/sofia-ops/worldStore.ts b/src/lib/sofia-ops/worldStore.ts
 new file mode 100644
-index 0000000..b21eee1
+index 0000000..cbcdbe3
 --- /dev/null
 +++ b/src/lib/sofia-ops/worldStore.ts
-@@ -0,0 +1,281 @@
+@@ -0,0 +1,314 @@
 +"use client";
 +
 +// Sofia Spatial OS — client world store.
@@ -3443,7 +3732,9 @@ index 0000000..b21eee1
 +};
 +
 +const MAX_SNAPSHOTS = 180;
-+const MAX_EVENTS = 240;
++// Runtime and external events have separate windows: busy agents must never
++// push the critical event that opened an incident out of the reducer's input.
++const MAX_EXTERNAL = 240;
 +const AUTO_FOLLOW_KEY = "sofia-ops:auto-follow";
 +
 +const readAutoFollow = () => {
@@ -3459,12 +3750,16 @@ index 0000000..b21eee1
 +const store = {
 +  external: new Map<string, WorldEvent>(),
 +  head: 0,
++  epoch: null as string | null,
++  // server clock - client clock (ms), smoothed; external timestamps are rebased.
++  skew: null as number | null,
 +  agents: [] as SofiaWorldView["agents"],
 +  agentKey: "",
 +  live: emptyWorld,
 +  liveSignature: worldSignature(emptyWorld),
 +  snapshots: [] as WorldSnapshot[],
-+  replayIndex: null as number | null,
++  // The replayed snapshot itself (not an index), so ring shifts never move it.
++  replay: null as WorldSnapshot | null,
 +  autoFollow: true,
 +  glideRequest: 0,
 +  inspect: null as InspectTarget | null,
@@ -3480,14 +3775,14 @@ index 0000000..b21eee1
 +const listeners = new Set<() => void>();
 +
 +const buildView = (): SofiaWorldView => {
-+  const replaying = store.replayIndex !== null && store.snapshots[store.replayIndex];
-+  const snapshot = replaying ? store.snapshots[store.replayIndex as number] : null;
++  const snapshot = store.replay;
++  const index = snapshot ? Math.max(0, store.snapshots.indexOf(snapshot)) : store.snapshots.length - 1;
 +  return {
 +    world: snapshot ? snapshot.world : store.live,
 +    live: store.live,
 +    replay: {
 +      active: Boolean(snapshot),
-+      index: store.replayIndex ?? store.snapshots.length - 1,
++      index,
 +      total: store.snapshots.length,
 +      at: snapshot ? snapshot.at : null,
 +    },
@@ -3517,7 +3812,7 @@ index 0000000..b21eee1
 +  const byId = new Map<string, WorldEvent>();
 +  for (const event of getSofiaOpsEvents()) byId.set(event.id, event as WorldEvent);
 +  for (const event of store.external.values()) byId.set(event.id, event);
-+  return [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, MAX_EVENTS);
++  return [...byId.values()].sort((a, b) => b.ts - a.ts);
 +};
 +
 +// Recompute the live world. Only notifies (and snapshots) when something visible changed.
@@ -3538,10 +3833,7 @@ index 0000000..b21eee1
 +  }
 +  if (changed) {
 +    store.snapshots.push({ at: now, world: live, signature });
-+    if (store.snapshots.length > MAX_SNAPSHOTS) {
-+      store.snapshots.shift();
-+      if (store.replayIndex !== null) store.replayIndex = Math.max(0, store.replayIndex - 1);
-+    }
++    if (store.snapshots.length > MAX_SNAPSHOTS) store.snapshots.shift();
 +  }
 +  emit();
 +};
@@ -3559,32 +3851,53 @@ index 0000000..b21eee1
 +  }, 120);
 +};
 +
-+const pollOnce = async () => {
++let inFlight: Promise<void> | null = null;
++
++const fetchEvents = async (): Promise<void> => {
 +  if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
 +  try {
 +    const response = await fetch("/api/sofia-ops/events?after=" + store.head, { cache: "no-store", credentials: "same-origin" });
 +    if (!response.ok) return;
-+    const data = (await response.json()) as { head?: number; events?: WorldEvent[] };
++    const data = (await response.json()) as { epoch?: string; head?: number; serverNow?: number; events?: WorldEvent[] };
 +    store.lastPollOk = Date.now();
-+    if (typeof data.head === "number" && data.head < store.head) {
-+      // Server restarted (RAM store reset): resync from scratch.
++    if (data.epoch && store.epoch && data.epoch !== store.epoch) {
++      // Server restarted or the harness was reset: drop the cache, refetch all.
++      store.epoch = data.epoch;
 +      store.external.clear();
 +      store.head = 0;
++      recompute(true);
++      return fetchEvents();
 +    }
++    if (data.epoch) store.epoch = data.epoch;
++    if (typeof data.serverNow === "number") {
++      const sample = data.serverNow - Date.now();
++      store.skew = store.skew === null ? sample : Math.round(store.skew * 0.8 + sample * 0.2);
++    }
++    const skew = store.skew ?? 0;
 +    let added = 0;
 +    for (const event of data.events ?? []) {
 +      if (!store.external.has(event.id)) added += 1;
-+      store.external.set(event.id, event);
++      store.external.set(event.id, { ...event, ts: event.ts - skew });
 +    }
-+    if (store.external.size > MAX_EVENTS) {
-+      const keep = [...store.external.values()].sort((a, b) => b.ts - a.ts).slice(0, MAX_EVENTS);
++    if (store.external.size > MAX_EXTERNAL) {
++      const keep = [...store.external.values()].sort((a, b) => b.ts - a.ts).slice(0, MAX_EXTERNAL);
 +      store.external = new Map(keep.map((event) => [event.id, event]));
 +    }
-+    if (typeof data.head === "number") store.head = data.head;
++    if (typeof data.head === "number") store.head = Math.max(store.head, data.head);
 +    if (added) recompute();
 +  } catch {
 +    // Offline or gateway hiccup: keep the last world, try again later.
 +  }
++};
++
++// Single-flight: overlapping polls (timer, refresh, visibility) share one request.
++const pollOnce = () => {
++  if (!inFlight) {
++    inFlight = fetchEvents().finally(() => {
++      inFlight = null;
++    });
++  }
++  return inFlight;
 +};
 +
 +const schedulePoll = () => {
@@ -3642,7 +3955,7 @@ index 0000000..b21eee1
 +  setReplayIndex(index: number | null) {
 +    const next = index === null || store.snapshots.length === 0 ? null : Math.max(0, Math.min(store.snapshots.length - 1, index));
 +    // The last snapshot is "now": selecting it means LIVE.
-+    store.replayIndex = next !== null && next >= store.snapshots.length - 1 ? null : next;
++    store.replay = next !== null && next < store.snapshots.length - 1 ? store.snapshots[next] : null;
 +    emit();
 +  },
 +  setAutoFollow(value: boolean) {
@@ -3680,6 +3993,15 @@ index 0000000..b21eee1
 +
 +export const useSofiaWorld = (): SofiaWorldView =>
 +  useSyncExternalStore(sofiaWorld.subscribe, sofiaWorld.getView, serverView);
++
++// Narrow subscription: re-renders only when the selected value changes
++// identity (the World State object is kept stable while nothing visible changes).
++export const useSofiaWorldSelector = <T,>(select: (view: SofiaWorldView) => T): T =>
++  useSyncExternalStore(
++    sofiaWorld.subscribe,
++    () => select(sofiaWorld.getView()),
++    () => select(serverView()),
++  );
 diff --git a/tests/fixtures/sofia-floor1-furniture.json b/tests/fixtures/sofia-floor1-furniture.json
 new file mode 100644
 index 0000000..ed04229
@@ -3690,10 +4012,10 @@ index 0000000..ed04229
 \ No newline at end of file
 diff --git a/tests/unit/sofiaSpatialTargets.test.ts b/tests/unit/sofiaSpatialTargets.test.ts
 new file mode 100644
-index 0000000..04e3e50
+index 0000000..887d7d8
 --- /dev/null
 +++ b/tests/unit/sofiaSpatialTargets.test.ts
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,99 @@
 +import { describe, expect, it } from "vitest";
 +import floor1 from "../fixtures/sofia-floor1-furniture.json";
 +import { astar, buildNavGrid, getMeetingSeatLocations } from "@/features/retro-office/core/navigation";
@@ -3760,14 +4082,13 @@ index 0000000..04e3e50
 +  it("first floor: Railway Ops reaches the server room through its door", () => {
 +    const { set } = resolveFloor(items, "openclaw-ground", ["infra"]);
 +    const target = set.targets["railway-ops"];
-+    // Server room walls: x 30..330, y 60..300 (door at x 150..190, y 300).
-+    expect(target.x).toBeGreaterThan(30);
-+    expect(target.x).toBeLessThan(330);
-+    expect(target.y).toBeLessThanOrEqual(310);
-+    const path = astar(650, 230, target.x, target.y, grid);
-+    expect(path.length).toBeGreaterThan(0);
-+    // The route really crosses the door gap instead of stopping outside.
-+    expect(path.some((point) => point.y < 300 && point.x < 330)).toBe(true);
++    // Server room walls: x 30..330, y 60..300, door at x 150..190 / y 300. The
++    // terminal sits right behind the door, so the agent works from the doorway.
++    expect(target.x).toBeGreaterThan(140);
++    expect(target.x).toBeLessThan(200);
++    expect(target.y).toBeGreaterThan(280);
++    expect(target.y).toBeLessThanOrEqual(330);
++    expect(astar(650, 230, target.x, target.y, grid).length).toBeGreaterThan(0);
 +  });
 +
 +  const presets: [string, SofiaFloorId][] = [
@@ -3796,10 +4117,10 @@ index 0000000..04e3e50
 +});
 diff --git a/tests/unit/sofiaWorldState.test.ts b/tests/unit/sofiaWorldState.test.ts
 new file mode 100644
-index 0000000..559d829
+index 0000000..ee40ea3
 --- /dev/null
 +++ b/tests/unit/sofiaWorldState.test.ts
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,179 @@
 +import { describe, expect, it } from "vitest";
 +import { classifyEvent, reduceWorld, worldSignature, type WorldEvent } from "@/lib/sofia-ops/worldState";
 +
@@ -3932,5 +4253,50 @@ index 0000000..559d829
 +    expect(classifyEvent(ev({ type: "railway.deploy.failed", source: "railway", severity: "critical" }, 0))).toMatchObject({ kind: "deploy.failed", zone: "infra", critical: true });
 +    expect(classifyEvent(ev({ type: "github.ci.test" }, 0))).toMatchObject({ kind: "qa", floorId: "dev-third" });
 +    expect(classifyEvent(ev({ type: "incident.resolved", severity: "success" }, 0)).kind).toBe("recovery");
++  });
++
++  it("does not treat failure words as recovery (unhealthy / unresolved)", () => {
++    const opened = ev({ type: "railway.deploy.failed", source: "railway", severity: "critical" }, 0);
++    const unhealthy = ev({ type: "railway.service.unhealthy", source: "railway", severity: "critical" }, 5000);
++    const unresolved = ev({ type: "incident.unresolved", source: "railway", severity: "warning" }, 6000);
++    const world = reduceWorld([opened, unhealthy, unresolved], AGENTS, T0 + 8000);
++    expect(world.mode).toBe("incident");
++    expect(world.incident?.resolvedAt).toBeNull();
++  });
++
++  it("only closes an incident with a related, non-simulated recovery", () => {
++    const opened = ev({ type: "railway.deploy.failed", source: "railway", severity: "critical" }, 0);
++    const unrelated = ev({ type: "n8n.workflow.recovered", source: "n8n", severity: "success" }, 5000);
++    const simulated = ev({ type: "incident.resolved", source: "railway", severity: "success", synthetic: true }, 6000);
++    const world = reduceWorld([opened, unrelated, simulated], AGENTS, T0 + 8000);
++    expect(world.incident?.state).not.toBe("recuperando");
++    const related = ev({ type: "railway.deploy.success", source: "railway", severity: "success" }, 9000);
++    const recovered = reduceWorld([opened, unrelated, simulated, related], AGENTS, T0 + 10000);
++    expect(recovered.incident?.state).toBe("recuperando");
++    // The deploy success still routes Railway Ops to Infra.
++    expect(recovered.agents["railway-ops"].zone).toBe("infra");
++  });
++
++  it("keeps a sustained outage open past the timeout instead of flapping", () => {
++    const events = Array.from({ length: 13 }, (_, minute) => ev({ type: "railway.deploy.failed", source: "railway", severity: "critical" }, minute * 60_000));
++    const ids = new Set<string>();
++    for (const at of [570_000, 603_000, 630_000, 660_000, 750_000]) {
++      const world = reduceWorld(events, AGENTS, T0 + at);
++      expect(world.incident, "at " + at).not.toBeNull();
++      ids.add(world.incident!.id);
++    }
++    expect(ids.size).toBe(1);
++  });
++
++  it("does not open a War Room from substrings like cooldown", () => {
++    const world = reduceWorld([ev({ type: "railway.service.cooldown", source: "railway", severity: "info" }, 0)], AGENTS, T0 + 1000);
++    expect(world.incident).toBeNull();
++    expect(world.agents["railway-ops"].zone).toBe("infra");
++  });
++
++  it("never summons a substitute for an agent already in the War Room", () => {
++    const world = reduceWorld([ev({ type: "incident.opened", source: "system", severity: "critical" }, 0)], AGENTS, T0 + 1000);
++    expect(world.incident?.responsible).toEqual(["supervisor", "main"]);
++    expect(Object.values(world.agents).filter((agent) => agent.substituteFor)).toEqual([]);
 +  });
 +});

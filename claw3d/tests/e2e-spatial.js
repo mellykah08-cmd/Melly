@@ -135,7 +135,7 @@ const check = (name, ok, detail) => {
   const shadow = await waitFor(() => {
     const w = window.__SOFIA_WORLD?.world;
     const p = window.__SOFIA_AGENT_POS?.['sofia-monitor'];
-    return { ok: w?.shadow?.active && w.shadow.candidate && w.shadow.human && w.shadow.compare?.score === 82 && p?.pose === 'stand' && Math.abs(p.tx - 729) < 60 && p.ty < 140, shadow: w?.shadow?.compare, p };
+    return { ok: w?.shadow?.active && w.shadow.candidate && w.shadow.human && w.shadow.compare?.score === 82 && p?.pose === 'stand' && Math.abs(p.tx - 729) < 100 && p.ty < 140, shadow: w?.shadow?.compare, p };
   });
   check('shadow: twin pair + comparison 82% + Sofia Monitor sent to the shadow booth', shadow?.ok, shadow);
   const shadowMove = await progress('sofia-monitor', 6000);

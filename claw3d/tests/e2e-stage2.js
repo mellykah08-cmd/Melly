@@ -112,7 +112,8 @@ const check = (name, ok, detail) => {
     for (const zone of ['audit', 'infra', 'shadow', 'qa']) {
       const a = window.__SOFIA_ANCHORS[zone];
       if (!a) continue;
-      const p = window.__SOFIA_PROJECT(a.x, a.y, 0.5);
+      // Tap the front (south) edge of the station, where a finger naturally lands.
+      const p = window.__SOFIA_PROJECT(a.x, a.y + 30, 0.3);
       const top = document.elementFromPoint(p.x, p.y);
       if (p.x > 20 && p.x < innerWidth - 20 && p.y > 100 && p.y < innerHeight - 150 && top && top.tagName === 'CANVAS') {
         out.push({ zone, point: p, d: Math.hypot(p.x - innerWidth / 2, p.y - innerHeight / 2) });
