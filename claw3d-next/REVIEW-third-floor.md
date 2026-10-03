@@ -51,3 +51,7 @@ Frontend needs a staging-only rebuild. Keep original deploy/start command as rol
 No n8n workflow has been edited or connected by this change. Live Android graphics
 and real producer delivery need an explicit test event; local HTTP/WS tests do not
 prove n8n integration. Production, login, Gateway and zooming-sparkle untouched.
+
+## Local mobile visual preview
+
+The staging diagnostic UI now includes **Testar 3º andar**. It sends a local browser event to a separate, ephemeral Director preview state for `main`. Controls select running (blue), completed (green), failed (red), or end the preview. All states expire in five minutes. Real telemetry for the same avatar always takes priority; ending a preview cannot erase real telemetry. This verifies rendering and deterministic targeting only, not n8n delivery or the HTTP/WebSocket bridge. No network requests, workflow execution or LLM calls are made by these controls.

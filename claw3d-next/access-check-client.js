@@ -95,7 +95,47 @@
     close.style.cssText = toggle.style.cssText;
     close.addEventListener('click', () => { panel.hidden = true; });
     panel.append(close);
-    root.append(panel, toggle);
+    const previewToggle = document.createElement('button');
+    previewToggle.type = 'button';
+    previewToggle.textContent = 'Testar 3º andar';
+    previewToggle.style.cssText = toggle.style.cssText + 'margin-left:6px;';
+    const previewPanel = document.createElement('section');
+    previewPanel.hidden = true;
+    previewPanel.style.cssText = panel.style.cssText;
+    const previewTitle = document.createElement('strong');
+    previewTitle.textContent = 'Simulação visual — 3º andar';
+    const previewText = document.createElement('p');
+    previewText.textContent = 'O avatar main vai à estação do 3º andar. Aguarde a chegada. Sem acionar n8n ou IA.';
+    const previewResult = document.createElement('p');
+    previewResult.setAttribute('aria-live', 'polite');
+    previewPanel.append(previewTitle, previewText, previewResult);
+    window.addEventListener('sofia-third-floor-preview-result', event => {
+      previewResult.textContent = event.detail === 'busy'
+        ? 'Um evento real está usando o avatar main e tem prioridade.'
+        : event.detail === 'ended' ? 'Teste encerrado. Avatar liberado.'
+        : 'Simulação ativa. Procure main no 3º andar.';
+    });
+    function preview(status) {
+      previewResult.textContent = 'Aguardando a cena carregar…';
+      window.dispatchEvent(new CustomEvent('sofia-third-floor-preview', { detail: status }));
+    }
+    for (const [label, status] of [['Azul: executando', 'workflow.running'], ['Verde: concluído', 'workflow.completed'], ['Vermelho: falhou', 'workflow.failed'], ['Encerrar teste', null]]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.style.cssText = toggle.style.cssText + 'display:block;margin:6px 0;width:100%;';
+      button.addEventListener('click', () => {
+        preview(status);
+        if (status === null) previewPanel.hidden = true;
+      });
+      previewPanel.append(button);
+    }
+    previewToggle.addEventListener('click', () => {
+      panel.hidden = true;
+      previewPanel.hidden = false;
+      preview('workflow.running');
+    });
+    root.append(panel, previewPanel, toggle, previewToggle);
     document.body.append(root);
     toggle.addEventListener('click', async () => {
       if (toggle.disabled) return;
