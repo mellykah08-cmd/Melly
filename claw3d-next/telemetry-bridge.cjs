@@ -37,8 +37,10 @@ const publish = event => {
   const key = JSON.stringify([event.agentId, event.runId]);
   const previous = runs.get(key);
   if (previous && (event.sequence <= previous.event.sequence || event.id === previous.event.id)) return false;
-  // A finished execution cannot return to running even with a higher sequence.
-  if (previous && previous.event.status !== 'workflow.running' && event.status === 'workflow.running') return false;
+  // Terminal is immutable, including completed -> failed and failed -> completed.
+  if (previous && previous.event.status !== 'workflow.running') return false;
+  const active = [...runs.values()].reverse().find(value => value.event.agentId === event.agentId);
+  if (active && active.event.runId !== event.runId && event.status !== 'workflow.running') return false;
   runs.delete(key);
   runs.set(key, { event, receivedAt: Date.now() });
   while (runs.size > MAX_RUNS) runs.delete(runs.keys().next().value);
@@ -56,7 +58,9 @@ const authenticate = (socket, hello) => {
   socket.once('error', remove);
   prune();
   // At most 100 current run states, sent only AFTER the matching hello response.
-  for (const value of runs.values()) transmit(socket, value.event);
+  const current = new Map();
+  for (const value of runs.values()) current.set(value.event.agentId, value.event);
+  for (const event of current.values()) transmit(socket, event);
   return true;
 };
 const reply = (res, status, value) => {
