@@ -109,6 +109,45 @@
     const previewResult = document.createElement('p');
     previewResult.setAttribute('aria-live', 'polite');
     previewPanel.append(previewTitle, previewText, previewResult);
+    // SOFIA_PHASE2_ROUTE_DIAG_R3: read only main's navigation metadata.
+    const routeStatus = document.createElement('p');
+    routeStatus.style.cssText = 'white-space:pre-line;font-size:11px;line-height:1.4;';
+    routeStatus.textContent = 'Diagnóstico R3: aguardando a cena.';
+    previewPanel.append(routeStatus);
+    let reports = 0;
+    let lastReportAt = -Infinity;
+    const finite = n => Number.isFinite(n) ? Math.round(n * 1000) / 1000 : null;
+    const vector = value => Array.isArray(value) ? value.slice(0, 3).map(finite) : null;
+    const states = new Set(['walking', 'standing', 'sitting', 'working', 'away', 'dancing', 'working_out']);
+    const phases = new Set(['workflow.running', 'workflow.completed', 'workflow.failed']);
+    window.setInterval(() => {
+      if (document.hidden) return;
+      const canvas = document.querySelector('canvas[data-sofia-main]');
+      let raw;
+      try { raw = JSON.parse(canvas?.dataset.sofiaMain || 'null'); } catch { return; }
+      if (!raw) { routeStatus.textContent = 'Diagnóstico R3: main ainda não disponível.'; return; }
+      const diagnostic = {
+        revision: 'R3', scene: raw.revision === 'R3' ? 'R3' : 'anterior',
+        x: finite(raw.x), y: finite(raw.y), world: vector(raw.world), target: vector(raw.target),
+        route: raw.route === true, state: states.has(raw.state) ? raw.state : null,
+        path: Number.isSafeInteger(raw.path) ? Math.max(0, Math.min(10000, raw.path)) : null,
+        blocked: raw.blocked === true, phase: phases.has(raw.phase) ? raw.phase : null,
+        speed: finite(raw.speed), frame: finite(raw.frame),
+        next: raw.next ? { x: finite(raw.next.x), y: finite(raw.next.y), world: vector(raw.next.sofiaWorld) } : null,
+      };
+      routeStatus.textContent = 'Diagnóstico R3 · Cena ' + diagnostic.scene + '\n' +
+        'Posição: ' + diagnostic.x + ', ' + diagnostic.y + ' · altura: ' + (diagnostic.world?.[1] ?? '?') + '\n' +
+        'Destino: ' + (diagnostic.target?.join(', ') ?? '?') + '\n' +
+        'Caminho: ' + diagnostic.path + ' pontos · ' + (diagnostic.blocked ? 'bloqueado' : diagnostic.state || 'aguardando') + '\n' +
+        'Evento: ' + (diagnostic.phase || 'sem evento do 3º andar');
+      const now = Date.now();
+      if (reports >= 8 || now - lastReportAt < 10000) return;
+      reports++; lastReportAt = now;
+      // Same authenticated staging origin; no token, run ID, messages or agent data.
+      void fetch('/api/sofia-ops/client-error', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: 'sofia-third-floor-route', kind: 'route-snapshot', message: JSON.stringify(diagnostic) }),
+      }).catch(() => {});
+    }, 1000);
     window.addEventListener('sofia-third-floor-preview-result', event => {
       previewResult.textContent = event.detail === 'busy'
         ? 'Um evento real está usando o avatar main e tem prioridade.'

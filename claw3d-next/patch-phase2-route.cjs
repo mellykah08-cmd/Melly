@@ -84,6 +84,10 @@ if (!changed.scene.includes('SOFIA_PHASE2_ROUTE_SYNC_R2')) {
   replace('scene', '        const start = existing ?? ns;\n        const tx = ns.targetX ?? existing?.targetX ?? start.x!;\n        const ty = ns.targetY ?? existing?.targetY ?? start.y!;\n        const needsRoute = !existing?.sofiaThirdFloorRoute || existing.targetX !== tx || existing.targetY !== ty || existing.sofiaRouteBlocked;\n        ns.x = start.x; ns.y = start.y;\n        ns.sofiaWorldPosition = start.sofiaWorldPosition ?? toWorld(start.x!, start.y!);\n        ns.sofiaThirdFloorRoute = true;\n        if (needsRoute) ns.path = planThirdFloorRoute({ x: start.x!, y: start.y!, sofiaWorldPosition: start.sofiaWorldPosition }, { x: tx, y: ty }, furnitureRef.current ?? [], sofiaUpperFurniture);\n        const arrived = Math.hypot(start.x! - tx, start.y! - ty) < 0.1;\n        ns.sofiaRouteBlocked = !ns.path?.length && !arrived;\n        ns.state = ns.path?.length ? "walking" : arrived && ns.sofiaPose === "sit" ? "sitting" : "standing";\n        ns.bumpedUntil = undefined; ns.bumpTalkUntil = undefined;', '        // SOFIA_PHASE2_ROUTE_SYNC_R2: preserve the route through pose/status updates.\n        Object.assign(ns, synchronizeThirdFloorRoute((existing ?? ns) as RenderAgent, ns, furnitureRef.current ?? [], sofiaUpperFurniture));');
 }
 
+if (!changed.spatial.includes('SOFIA_PHASE2_ROUTE_DIAG_R3')) {
+  replace('spatial', 'gl.domElement.dataset.sofiaMain = JSON.stringify(main ? { x: main.x, y: main.y, world: main.sofiaWorldPosition, state: main.state, path: main.path?.length ?? 0, blocked: main.sofiaRouteBlocked ?? false, phase: state?.status ?? null, runId: state?.runId ?? null, frame: main.frame } : null);', '// SOFIA_PHASE2_ROUTE_DIAG_R3\n    gl.domElement.dataset.sofiaMain = JSON.stringify(main ? { revision: "R3", x: main.x, y: main.y, world: main.sofiaWorldPosition, target: [main.targetX, main.targetY], route: Boolean(main.sofiaThirdFloorRoute), next: main.path?.[0] ?? null, speed: main.walkSpeed, state: main.state, path: main.path?.length ?? 0, blocked: main.sofiaRouteBlocked ?? false, phase: state?.status ?? null, frame: main.frame } : null);');
+}
+
 // Resolve every anchor before modifying any source. Copy the canonical modules;
 // scene, renderer and state store must import the same names.
 const target = 'src/features/sofia-ops';
@@ -92,3 +96,5 @@ for (const name of ['ThirdFloorRoute.ts', 'ThirdFloorDirector.ts', 'ThirdFloorSt
 for (const [key, file] of Object.entries(files)) fs.writeFileSync(file, changed[key]);
 console.log(`${marker}: physical route, elapsed-time walk and color source installed`);
 console.log('SOFIA_PHASE2_ROUTE_SYNC_R2: physical route preserved across status/pose updates');
+
+console.log('SOFIA_PHASE2_ROUTE_DIAG_R3: main-only route diagnostics installed');

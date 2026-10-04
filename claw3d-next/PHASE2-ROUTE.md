@@ -39,3 +39,9 @@ O canvas expõe `data-sofia-main` com coordenadas, posição física, estado, ta
 ## Atualização R2 — parada após sincronização
 
 Uma atualização de pose/status podia executar o planejador legado e substituir a rota física por waypoints sem `sofiaWorld`, mesmo quando o destino não mudava. O avanço físico rejeitava esse caminho incompatível e ficava parado. `synchronizeThirdFloorRoute` agora preserva o percurso físico para o mesmo destino, reconstrói rotas que perderam metadados e planeja a descida quando há mudança real de destino. O overlay R2 também atualiza uma instalação R1 existente e permanece idempotente. Três regressões executam o sincronizador e o movimento reais, incluindo atualização na saída da primeira rampa. A confirmação do usuário validou caminhada, primeira subida e velocidade no Android; chegada final e cores continuam pendentes.
+
+## Diagnóstico R3 — sem nova alteração de movimento
+
+O feedback Android depois de R2 ainda mostrou main parado. A causa desse caso não está confirmada. O teste visual agora mostra revisão da cena, posição/altura, destino, quantidade de waypoints, bloqueio e fase. O cliente envia até oito amostras de metadata de navegação de main, espaçadas por dez segundos, para a rota de diagnóstico já existente no mesmo staging autenticado. Não envia token, runId, conversa, paciente ou dados de outros NPCs. A leitura distingue cliente antigo, falta de ordem, rota bloqueada e falha de avanço. Não foi alterada a rota/movimento nesta revisão.
+
+Para executar a regressão do diagnóstico, copiar access-check-client.js para tests/fixtures/sofia-access-check-client.js e sofia.routeDiagnostics.test.ts para tests/unit/ no checkout reconstruído; executar npx vitest run tests/unit/sofia.routeDiagnostics.test.ts.
