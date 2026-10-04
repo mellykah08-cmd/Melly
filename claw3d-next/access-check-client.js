@@ -112,9 +112,11 @@
     // SOFIA_PHASE2_ROUTE_DIAG_R3: read only main's navigation metadata.
     const routeStatus = document.createElement('p');
     routeStatus.style.cssText = 'white-space:pre-line;font-size:11px;line-height:1.4;';
-    routeStatus.textContent = 'Diagnóstico R3: aguardando a cena.';
+    routeStatus.textContent = 'Diagnóstico R4: aguardando a cena.';
     previewPanel.append(routeStatus);
     let reports = 0;
+    const milestones = new Set();
+    let observedActive = false;
     let lastReportAt = -Infinity;
     const finite = n => Number.isFinite(n) ? Math.round(n * 1000) / 1000 : null;
     const vector = value => Array.isArray(value) ? value.slice(0, 3).map(finite) : null;
@@ -125,9 +127,9 @@
       const canvas = document.querySelector('canvas[data-sofia-main]');
       let raw;
       try { raw = JSON.parse(canvas?.dataset.sofiaMain || 'null'); } catch { return; }
-      if (!raw) { routeStatus.textContent = 'Diagnóstico R3: main ainda não disponível.'; return; }
+      if (!raw) { routeStatus.textContent = 'Diagnóstico R4: main ainda não disponível.'; return; }
       const diagnostic = {
-        revision: 'R3', scene: raw.revision === 'R3' ? 'R3' : 'anterior',
+        revision: 'R4', scene: raw.revision === 'R3' ? 'R3' : 'anterior',
         x: finite(raw.x), y: finite(raw.y), world: vector(raw.world), target: vector(raw.target),
         route: raw.route === true, state: states.has(raw.state) ? raw.state : null,
         path: Number.isSafeInteger(raw.path) ? Math.max(0, Math.min(10000, raw.path)) : null,
@@ -135,14 +137,25 @@
         speed: finite(raw.speed), frame: finite(raw.frame),
         next: raw.next ? { x: finite(raw.next.x), y: finite(raw.next.y), world: vector(raw.next.sofiaWorld) } : null,
       };
-      routeStatus.textContent = 'Diagnóstico R3 · Cena ' + diagnostic.scene + '\n' +
+      routeStatus.textContent = 'Diagnóstico R4 · Cena ' + diagnostic.scene + '\n' +
         'Posição: ' + diagnostic.x + ', ' + diagnostic.y + ' · altura: ' + (diagnostic.world?.[1] ?? '?') + '\n' +
         'Destino: ' + (diagnostic.target?.join(', ') ?? '?') + '\n' +
         'Caminho: ' + diagnostic.path + ' pontos · ' + (diagnostic.blocked ? 'bloqueado' : diagnostic.state || 'aguardando') + '\n' +
         'Evento: ' + (diagnostic.phase || 'sem evento do 3º andar');
+      // Preserve evidence of arrival and release even after periodic samples end.
+      const atDestination = diagnostic.route && diagnostic.target?.[0] === 1390 && diagnostic.target?.[1] === 1710 &&
+        diagnostic.x === 1390 && diagnostic.y === 1710 && diagnostic.world?.[1] === 9.6 &&
+        diagnostic.path === 0 && !diagnostic.blocked && diagnostic.state !== 'walking';
+      const active = Boolean(diagnostic.phase);
+      let milestone = active ? diagnostic.blocked ? 'blocked' : atDestination ? 'arrived' : 'active'
+        : observedActive ? 'released' : null;
+      if (active) observedActive = true;
+      if (atDestination && active) routeStatus.textContent += '\nChegada confirmada ao 3º andar. Aguardando encerramento do evento.';
       const now = Date.now();
-      if (reports >= 8 || now - lastReportAt < 10000) return;
-      reports++; lastReportAt = now;
+      const important = milestone && !milestones.has(milestone);
+      if (!important && (reports >= 8 || now - lastReportAt < 10000)) return;
+      if (important) { milestones.add(milestone); diagnostic.milestone = milestone; }
+      else { reports++; lastReportAt = now; }
       // Same authenticated staging origin; no token, run ID, messages or agent data.
       void fetch('/api/sofia-ops/client-error', { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ scope: 'sofia-third-floor-route', kind: 'route-snapshot', message: JSON.stringify(diagnostic) }),
