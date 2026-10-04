@@ -88,6 +88,35 @@ export function planThirdFloorRoute(
   return route;
 }
 
+// Gateway/status updates run the legacy synchronizer before this reconciliation.
+// For an unchanged destination, retain the physical path rather than accepting a
+// fresh ground-only A* path generated when just the pose/status changed.
+export function synchronizeThirdFloorRoute(
+  start: RenderAgent,
+  next: Partial<RenderAgent>,
+  groundFurniture: FurnitureItem[],
+  upperFurniture: FurnitureItem[],
+): Partial<RenderAgent> {
+  const targetX = next.targetX ?? start.targetX;
+  const targetY = next.targetY ?? start.targetY;
+  const world = start.sofiaWorldPosition ?? toWorld(start.x, start.y);
+  const third = targetX === THIRD_FLOOR_DESTINATION.x && targetY === THIRD_FLOOR_DESTINATION.y;
+  const destination = third ? SECOND_RAMP_END.sofiaWorld : point(targetX, targetY, 0).sofiaWorld;
+  const arrived = Math.hypot(start.x - targetX, start.y - targetY) < 0.1 &&
+    Math.hypot(...world.map((value, index) => value - destination[index])) < 1e-6;
+  const incompatible = start.path.some(p => !p.sofiaWorld || !p.sofiaWorld.every(Number.isFinite));
+  const replan = !start.sofiaThirdFloorRoute || start.targetX !== targetX || start.targetY !== targetY ||
+    start.sofiaRouteBlocked || incompatible || (!start.path.length && !arrived);
+  const path = replan
+    ? planThirdFloorRoute({ x: start.x, y: start.y, sofiaWorldPosition: world }, { x: targetX, y: targetY }, groundFurniture, upperFurniture)
+    : start.path;
+  return { x: start.x, y: start.y, targetX, targetY, path,
+    sofiaWorldPosition: world, sofiaThirdFloorRoute: true,
+    sofiaRouteBlocked: !path.length && !arrived,
+    state: path.length ? "walking" : arrived && next.sofiaPose === "sit" ? "sitting" : "standing",
+    bumpedUntil: undefined, bumpTalkUntil: undefined };
+}
+
 // Consume the entire elapsed-distance budget across waypoint boundaries.
 // No frame-count speed, destination teleport or lost remainder at low FPS.
 export function advanceThirdFloorRoute(agent: RenderAgent, delta: number): Partial<RenderAgent> {

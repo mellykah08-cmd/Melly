@@ -35,3 +35,7 @@ NEXT_TELEMETRY_DISABLED=1 npx next build --webpack
 ```
 
 O canvas expõe `data-sofia-main` com coordenadas, posição física, estado, tamanho da rota, bloqueio, fase, runId e frame, apenas para diagnóstico da homologação; não contém conversa ou paciente. Usar junto a capturas visuais, sem tratar dados de posição ou HTTP202 isoladamente como aprovação visual. Android ainda exige conferência final do usuário.
+
+## Atualização R2 — parada após sincronização
+
+Uma atualização de pose/status podia executar o planejador legado e substituir a rota física por waypoints sem `sofiaWorld`, mesmo quando o destino não mudava. O avanço físico rejeitava esse caminho incompatível e ficava parado. `synchronizeThirdFloorRoute` agora preserva o percurso físico para o mesmo destino, reconstrói rotas que perderam metadados e planeja a descida quando há mudança real de destino. O overlay R2 também atualiza uma instalação R1 existente e permanece idempotente. Três regressões executam o sincronizador e o movimento reais, incluindo atualização na saída da primeira rampa. A confirmação do usuário validou caminhada, primeira subida e velocidade no Android; chegada final e cores continuam pendentes.

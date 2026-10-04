@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { materializeDefaults } from "@/features/retro-office/core/furnitureDefaults";
 import { projectFurnitureIntoRemoteOfficeZone } from "@/features/retro-office/core/district";
-import { planThirdFloorRoute, advanceThirdFloorRoute, FIRST_RAMP_START, FIRST_RAMP_END, SECOND_RAMP_START, SECOND_RAMP_END } from "@/features/sofia-ops/ThirdFloorRoute";
+import { planThirdFloorRoute, advanceThirdFloorRoute, synchronizeThirdFloorRoute, FIRST_RAMP_START, FIRST_RAMP_END, SECOND_RAMP_START, SECOND_RAMP_END } from "@/features/sofia-ops/ThirdFloorRoute";
 import type { FurnitureItem, RenderAgent } from "@/features/retro-office/core/types";
 
 const ground = materializeDefaults("office");
@@ -12,6 +12,38 @@ const destination = { x: 1390, y: 1710 };
 const makeAgent = (x = 800, y = 420) => ({ id: "main", x, y, targetX: 1390, targetY: 1710, path: planThirdFloorRoute({ x, y }, destination, ground, upper), facing: 0, state: "walking", status: "working", walkSpeed: 0.3, phaseOffset: 0, frame: 0, sofiaPose: "stand" }) as RenderAgent;
 
 describe("Phase 2 physical third-floor route", () => {
+  it("keeps the physical route when a pose/status refresh supplies a plain A* path", () => {
+    let a = makeAgent(); a.sofiaThirdFloorRoute = true;
+    for (let i = 0; i < 30 * 150 && (a.sofiaWorldPosition?.[1] ?? 0) < 4.8 && a.path.length; i++) a = { ...a, ...advanceThirdFloorRoute(a, 1 / 30) };
+    expect(a.sofiaWorldPosition![1]).toBeGreaterThanOrEqual(4.8);
+    const committedPath = a.path;
+    const legacyUpdate = { ...a, path: [{ x: 1390, y: 1710 }], sofiaPose: "sit" as const };
+    const stuck = advanceThirdFloorRoute(legacyUpdate, 0.25);
+    expect([stuck.x, stuck.y, stuck.sofiaWorldPosition]).toEqual([a.x, a.y, a.sofiaWorldPosition]);
+    a = { ...legacyUpdate, ...synchronizeThirdFloorRoute(a, legacyUpdate, ground, upper) };
+    expect(a.path).toBe(committedPath);
+    expect(a.sofiaRouteBlocked).toBe(false);
+    for (let i = 0; i < 30 * 150 && a.path.length; i++) a = { ...a, ...advanceThirdFloorRoute(a, 1 / 30) };
+    expect(a.sofiaWorldPosition).toEqual(SECOND_RAMP_END.sofiaWorld);
+    expect(a.path).toEqual([]);
+  });
+  it("repairs a route that already lost physical metadata at the first ramp exit", () => {
+    const gate = planThirdFloorRoute(makeAgent(), destination, ground, upper).find(p => p.x === 1050 && p.y === 1055)!;
+    let a: RenderAgent = { ...makeAgent(), x: gate.x, y: gate.y, sofiaWorldPosition: gate.sofiaWorld,
+      sofiaThirdFloorRoute: true, path: [{ x: 1390, y: 1710 }] };
+    a = { ...a, ...synchronizeThirdFloorRoute(a, a, ground, upper) };
+    expect(a.path.every(p => p.sofiaWorld)).toBe(true);
+    expect(a.sofiaRouteBlocked).toBe(false);
+    for (let i = 0; i < 30 * 150 && a.path.length; i++) a = { ...a, ...advanceThirdFloorRoute(a, 1 / 30) };
+    expect(a.sofiaWorldPosition).toEqual(SECOND_RAMP_END.sofiaWorld);
+  });
+  it("replans a deliberate destination change as a physical descent", () => {
+    const a = { ...makeAgent(), x: 1390, y: 1710, sofiaWorldPosition: SECOND_RAMP_END.sofiaWorld, path: [], sofiaThirdFloorRoute: true };
+    const update = synchronizeThirdFloorRoute(a, { targetX: 800, targetY: 420 }, ground, upper);
+    expect(update.path).toContainEqual(SECOND_RAMP_START);
+    expect(update.path).toContainEqual(FIRST_RAMP_START);
+    expect(update.path?.every(p => p.sofiaWorld)).toBe(true);
+  });
   it.each([[800, 420], [450, 420], [1050, 690], [900, 200]])("routes from %s,%s through both authored ramps", (x, y) => {
     const route = planThirdFloorRoute({ x, y }, destination, ground, upper);
     expect(route.length).toBeGreaterThan(4);
