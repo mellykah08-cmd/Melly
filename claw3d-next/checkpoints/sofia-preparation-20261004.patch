@@ -1,0 +1,1268 @@
+diff --git a/claw3d-next/EXECUTION-20261004.md b/claw3d-next/EXECUTION-20261004.md
+new file mode 100644
+index 0000000..6ea012e
+--- /dev/null
++++ b/claw3d-next/EXECUTION-20261004.md
+@@ -0,0 +1,49 @@
++# Execução independente do plano — 2026-10-04
++
++Base confirmada: fork mellykah08-cmd/Melly, 979116769a0a08f67111efc5c6bcfd0df554c142. Branch de trabalho sofia-plan-20261004-implementation. Não promove expansão enquanto a Fase 2 não tiver homologação visual real. v7 + recuperação de acesso prevalecem sobre v6, dossiê e pacote do Drive.
++
++| Etapa | Contrato | Lacuna/dependência | Ação desta rodada |
++|---|---|---|---|
++| Baseline/reprodução | Patches e SHA efetivos identificados | Repo não representa sozinho o runtime | Ler config e congelar manifesto; checkout reconstruído local |
++| A/Fase 2 | Duas rampas, chegada, três cores e retorno no mesmo run real | Navegador próprio desconectado; captura expira | Conferir código, diagnóstico e testes; não cancelar OpenClaw pela legenda |
++| Telemetria v2 | running/log/step/terminal, sem regressão nem dados pessoais | Draft reabre terminal, troca stores e temporiza antes da chegada | Preparar bridge/Director únicos com flag de expansão desligada por padrão, logs técnicos de catálogo |
++| Estações | Piso 3, alvos distintos e ocupação determinística | Layout ainda não homologado; planner só endpoint fixo | Preparar alocador e API de piso explícito, validar obstáculos; não ativar múltiplos NPCs |
++| RTT/Fase 3 | CanvasTexture 512x256, dirty, 2Hz ativo, standby sem timer, dispose | Visibilidade/FPS Android e Fase 2 pendentes | Implementar monitor isolado e instalador canônico, teste local de lifecycle/build |
++| Produtor v2 | Manual inativo, apenas staging e payload sintético | Bridge ativa não aceita log/step | Corrigir export para importação futura; não publicar nem enviar v2 ao runtime atual |
++| B Short-Replay | RAM curta, slider e volta ao live sem mutar execução | Componente legado existe; dev-third é consumido antes do legado | Testar isolamento legado e preparar replay separado de observação dev-third |
++| C War Room | Incidente causal, responsáveis, recuperação relacionada | Não há produtor real homologado, ingestão genérica distinta | Revisar/testar reducer existente e proveniência; não disparar incidente no atendimento |
++| Shadow Twin | Candidato/humano/comparação mesma correlação, observação | Não há par de produtor DEV real identificado e sanitizado | Testar reducer/isolamento, registrar produtor necessário |
++| Integração DEV bot | Saídas WhatsApp/Calendar desligadas, observação não bloqueia bot | Workflow chamado DEV pode estar ativo; nome não garante segurança | Descobrir cópia realmente sem envio; preparar adaptador somente técnico |
++| Multi-projeto/funções físicas | Mundo contínuo, preservar térreo/câmera | Infra/Intel/Command não têm layout/aceite atuais | Revisar estado legado; manter expansão física pendente |
++| Histórico profundo/GPU/XR/simulação | Preparados e desligados | Fora da entrega imediata; custo proibitivo | Conferir flags e não ativar |
++| Custos | Sem Railway Agent/novos serviços/redeploy repetido | US$5 não é teto garantido; hard Agent0 ainda painel | Ler métricas antes/depois, manter revisão diária |
++
++Decisões executivas: preparação local segura segue o contrato corrigido v7. Logs livres não são anonimizados por truncamento; aceitar somente mensagens técnicas conhecidas/códigos e descartar extras. Alocação fixa por agente, rejeitar estação ocupada em vez de sobrepor. Replay é observação histórica, nunca alimenta Director live ou envia RPC. Flags de expansão permanecem desligadas; nenhum deploy nesta preparação até resolver dependências visuais.
++
++Baseline: Gateway SUCCESS 37c0953d-5670-4862-879a-5d0476bffa36, RAM1.051009GB média1h1.14616GB; staging SUCCESS3d568023-5961-4c66-8d07-9dc1113e4268 RAM0.15585GB. Produção cffe84d0-80c4-44e1-8388-6152f65de481 preservada. StartCommand staging SHA/overlays confirma9791167; staged=null. Patch antigo do ambiente não aceito.
++
++Baseline de testes: bridge phase2 passa. Teste CJS antigo do Director falha porque espera consumir audit-second; comportamento correto atual retorna false. Corrigir expectativa histórica, não o roteamento. Testes de rota e contrato local rodando. Jules revisão pública: sessions/8522806704206081173, sem merge/deploy.
++
++## Checkpoint final da rodada (04/10/2026)
++
++Nenhuma destas mudanças foi instalada na VPS. Produção e staging mantêm deployments anteriores. Preparações novas: telemetria enriquecida opt-in, stationId imutável, alocador e API explícita de piso, monitor single CanvasTexture, replay de observação bounded, adapter DEV puro, installer canônico e patch causal War Room/Shadow. Contratos estão em PREPARATION-GUIDE.md e hashes em SHA256SUMS.expansion.
++
++Testes finais do app: 1117 pass / 12 fail, 181 arquivos. As mesmas 12 falhas em chat, fleet, proxy, floor registry, settings e connection foram reproduzidas na cópia anterior, sem estas mudanças (64 pass /12 fail). Todos os testes Sofia novos/afetados passaram. Typecheck passou; build Next webpack passou localmente (compilação34.6s,33pages). O teste CJS access-check anterior tem3falhas de harness window.setInterval ausente; não representa prova visual. CJS telemetry-bridge.test requer upstream pin compatível com seus anchors v3.3, não uma cópia já patchada.
++
++QA n8n realmente executado no workflow isolado sem envio: 17/17 assertions e7/7 segurança, zero chamadas externas/mensagens reais. O adapter técnico ainda não está ligado ao workflow. O export novo foi revisado/testado estruturalmente, mas não importado/validado no n8n nem executado.
++
++Jules revisão pública sessions/8522806704206081173 concluída, usada para conferir limitações de replay/rotas e identificar vazamentos de correlação do reducer. Não se aplicou diff grande do agente; relato inicial impreciso foi corrigido por feedback e confronto com código.
++
++Visão pessoal 3D: tentativa de office mostrou sessão desconectada; Accessibility timeout, depois tab perdido, e staging direto ERR_BLOCKED_BY_CLIENT. Não houve captura WebGL válida, desktop/celular ou vídeo. Pixels do Canvas2D do monitor passaram, sem provar composição de cena/cores percebidas/FPS Android. Histórico arrived/released permanece histórico, não correlação nova de run.
++
++Pendências retomáveis por etapa:
++- Fase2: evento real n8n com accepted/broadcast/arrived/released do MESMO run e captura do trajeto/cores no celular.
++- Estações: validar candidatos contra mobiliário real, sincronizador de destinos explícitos, ocupação em cena e colisões; não promover generalização só pela API pura.
++- RTT: validar montagem single e performance/memória Android depois da Fase2; depois decidir múltiplos.
++- B: integrar produtor de poses1Hz, slider/renderer histórico separado, sem controlar Director/RPC. Primitive pronta/testada, feature completa pendente.
++- C: patch causal testado; falta produtor real isolado de incidente/recuperação e seats/collisionvisual.
++- Shadow: patch causal testado; falta par candidato/humano/compare sanitizado na mesma execução DEV.
++- DEVbot: QA sem envio passou; falta ligação técnica real observacional sem impacto no principal.
++- Multi-projeto/floors4–6: mappings legados revisados, geometria contínua/layout/aceite dependem níveis anteriores. Nenhum piso decorativo inventado.
++- GPU/history/XR/longsim continuam desligados; fora da entrega imediata.
++- Custos: revisão somente leitura; nenhum Agent pago/restart/build Railway/limite/serviço novo. RAM Gateway reduzida na janela observada, sem promessa de US$5.
+diff --git a/claw3d-next/MonitorCanvas.ts b/claw3d-next/MonitorCanvas.ts
+new file mode 100644
+index 0000000..331b10f
+--- /dev/null
++++ b/claw3d-next/MonitorCanvas.ts
+@@ -0,0 +1,42 @@
++import {CanvasTexture,LinearFilter,NearestFilter,SRGBColorSpace} from 'three';
++import type {ThirdFloorEvent} from './ThirdFloorDirector';
++export const WORKFLOW_COLORS={ 'workflow.running':'#38bdf8','workflow.completed':'#4ade80','workflow.failed':'#fb7185'} as const;
++export function createMonitorCanvas(canvas:HTMLCanvasElement,invalidate:()=>void) {
++ canvas.width=512;canvas.height=256;
++ const context=canvas.getContext('2d',{alpha:false});
++ if(!context)throw Error('Canvas 2D unavailable');
++ const ctx=context;
++ const texture=new CanvasTexture(canvas);texture.generateMipmaps=false;
++ texture.minFilter=LinearFilter;texture.magFilter=NearestFilter;texture.colorSpace=SRGBColorSpace;
++ let event:ThirdFloorEvent|null=null, timer:ReturnType<typeof setTimeout>|undefined;
++ let lastPaint=-Infinity, signature='', blink=false, disposed=false;
++ const schedule=()=>{
++  if(timer!==undefined||disposed)return;
++  timer=setTimeout(()=>{timer=undefined;blink=!blink;paint()},Math.max(0,500-(Date.now()-lastPaint)));
++ };
++ const paint=()=>{
++  if(disposed)return;
++  const now=Date.now();if(now-lastPaint<500){schedule();return;}
++  const active=event?.status==='workflow.running';
++  const key=JSON.stringify([event,active&&blink]);
++  if(key!==signature){
++   signature=key;lastPaint=now;
++   ctx.fillStyle='#0c1017';ctx.fillRect(0,0,512,256);
++   if(event){
++    const color=WORKFLOW_COLORS[event.status];
++    ctx.fillStyle=color;ctx.font='bold 18px monospace';ctx.fillText(event.status.replace('workflow.','').toUpperCase(),20,30);
++    ctx.fillStyle='#1e293b';ctx.fillRect(20,44,472,10);
++    ctx.fillStyle=color;ctx.fillRect(20,44,472*(event.progress??(event.status==='workflow.completed'?100:0))/100,10);
++    ctx.fillStyle='#e2e8f0';ctx.font='14px monospace';
++    for(const [index,line] of (event.recentLogs??[]).slice(-5).entries())ctx.fillText('> '+line.slice(0,52),20,85+index*24);
++    if(active&&blink){ctx.fillStyle=color;ctx.fillRect(20,212,8,12);}
++    ctx.fillStyle='#94a3b8';ctx.font='11px monospace';ctx.fillText(`${event.agentId} | seq ${event.sequence} | ${event.durationMs===undefined?'DEV':event.durationMs+'ms'}`,20,242);
++   }else{
++    ctx.fillStyle='#94a3b8';ctx.font='16px monospace';ctx.fillText('STANDBY',20,40);ctx.fillText('AGUARDANDO TELEMETRIA DEV',20,80);
++   }
++   texture.needsUpdate=true;invalidate();
++  }
++  if(active)schedule();
++ };
++ return {texture,update(next:ThirdFloorEvent|null){if(disposed)return;event=next;paint();},dispose(){disposed=true;if(timer!==undefined)clearTimeout(timer);timer=undefined;texture.dispose();}};
++}
+diff --git a/claw3d-next/NpcMonitorTexture.tsx b/claw3d-next/NpcMonitorTexture.tsx
+new file mode 100644
+index 0000000..11b508e
+--- /dev/null
++++ b/claw3d-next/NpcMonitorTexture.tsx
+@@ -0,0 +1,24 @@
++"use client";
++import {memo,useEffect,useRef,useState} from 'react';
++import {useThree} from '@react-three/fiber';
++import type {CanvasTexture} from 'three';
++import {useThirdFloorDirector} from './ThirdFloorDirector';
++import {createMonitorCanvas} from './MonitorCanvas';
++export const NpcMonitorScreen=memo(function NpcMonitorScreen({stationId}:{stationId:string}) {
++ const states=useThirdFloorDirector();
++ const event=Object.values(states).find(e=>(e.stationId??'qa_station_1')===stationId)??null;
++ const invalidate=useThree(s=>s.invalidate);
++ const resource=useRef<ReturnType<typeof createMonitorCanvas>|null>(null);
++ const [texture,setTexture]=useState<CanvasTexture|null>(null);
++ useEffect(()=>{
++  const monitor=createMonitorCanvas(document.createElement('canvas'),invalidate);
++  resource.current=monitor;setTexture(monitor.texture);
++  return ()=>{resource.current=null;monitor.dispose()};
++ },[invalidate]);
++ useEffect(()=>{resource.current?.update(event)},[event,texture]);
++ if(!texture)return null;
++ return <group>
++  <mesh><boxGeometry args={[0.58,0.34,0.05]}/><meshBasicMaterial color="#1e293b"/></mesh>
++  <mesh position={[0,0,0.027]}><planeGeometry args={[0.54,0.30]}/><meshBasicMaterial map={texture} toneMapped={false}/></mesh>
++ </group>;
++});
+diff --git a/claw3d-next/PREPARATION-GUIDE.md b/claw3d-next/PREPARATION-GUIDE.md
+new file mode 100644
+index 0000000..bdf8314
+--- /dev/null
++++ b/claw3d-next/PREPARATION-GUIDE.md
+@@ -0,0 +1,29 @@
++# Preparação isolada — contrato e índice canônico
++
++Este pacote é preparação local. Não foi instalado no Railway. Não homologar Fase 2/Fase 3 pela existência destes arquivos. O plano corrigido v7 prevalece sobre o draft do Drive. Não executar a cadeia antiga `-v2` nem trocar stores do monitor/ícone.
++
++| Arquivo | Responsabilidade | Gate |
++|---|---|---|
++| ThirdFloorDirector.ts | Único store; log/step mantêm running; terminal imutável; arrival/release preservados | Bridge/cliente consistentes |
++| telemetry-bridge.cjs | Ingress e broadcast autenticados; dados técnicos de catálogo, bounds e dedup | SOFIA_THIRD_FLOOR_TELEMETRY=1; log/step exigem SOFIA_THIRD_FLOOR_EXPANSION=1 |
++| ThirdFloorRoute.ts | Rota original preservada; API extra floorId explícito, obstacles no destino | Sincronizador/cena continuam apenas no destino legado; integração múltipla pendente |
++| ThirdFloorStations.ts | Candidatos y=1710; world pela conversão importada; leases agent/run | Layout/collision/ocupação física ainda não homologados |
++| MonitorCanvas.ts | CanvasTexture 512x256; dirty; máximo2Hz ativo; standby sem repetição; dispose | Pixels locais não comprovam WebGL/Android |
++| NpcMonitorTexture.tsx | Material do monitor, store compartilhado, cleanup | Montagem real 3D/performance pendente |
++| ThirdFloorWorkstations.tsx | Uma mesa/monitor candidato no piso3, afastado do main | Não faz avatar operar computador; nenhuma animação nova |
++| ShortReplay.ts | RAM180s/180frames,1Hz, posição physical fornecida, cursor imutável | Não captura automaticamente; slider/renderer espacial ainda por integrar |
++| patch-third-floor.cjs | Preflight dos arquivos/anchors; copyFileSync canônicos, montagem única, idempotente | Opt-in expansion; exige baseline rota/arrived; somente cópia reconstruída/staging |
++| patch-world-provenance.cjs | Isola incidente/Shadow por projeto, synthetic e correlação | SOFIA_WORLD_PROVENANCE=1; nunca altera autenticação |
++| dev-qa-telemetry.cjs | Adaptador puro de metadados técnicos para running/terminal | Só fonte QA isolada, manual/inativa e zero saídas; não envia/faz fetch |
++| Workflow_n8n_ThirdFloor_Preparation.json | Export manual inativo, running/log/step/completed, segundos explícitos, accepted guards | Não importado; atribuir credencial HeaderAuth existente segura; testar schema/import isolado após consumer v2 |
++| SHA256SUMS.expansion | SHA256 de cada componente de preparação | Pins para futura revisão, não startCommand instalado |
++
++Logs livres não são anonimizados por truncamento. Apenas os códigos `validation.started`, `validation.step`, `validation.completed` produzem texto técnico conhecido. Não passar respostas, contatos, payload de paciente, token ou logs de workflow ao monitor/replay.
++
++O assignment inicial stationId de um run é imutável. O allocator recusa estação ocupada; release só libera agent/run correspondente. Ele ainda não controla os avatares. A rota de terceiro piso explícito rejeita endpoints bloqueados e posições fora do corredor candidato. Não habilitar múltiplas estações sem testar mobiliário real, passagem, overlap e a reconciliação de destino.
++
++Antes de um eventual install: revisar produção/staging/config efetivos, manter autenticação e fases anteriores, revisar o diff e manifesto, copiar o pacote inteiro para um diretório conhecido, verificar sha256sum, executar os patches somente na cópia reconstruída, typecheck/test/build local e então decidir staging. Não montar um startCommand novo de memória nem aceitar patch do ambiente inteiro. Nenhum comando de deploy é fornecido como se estivesse aprovado pela homologação.
++
++Testes: os CJS novos são executáveis com Node24 e não precisam de serviços. Os tests/unit devem ser copiados para o app reconstruído com alias @. O teste de pixel requer @napi-rs/canvas instalado somente no laboratório (ou SOFIA_CANVAS_TEST_MODULE apontando para ele). Nenhuma dependência nova foi adicionada ao runtime da VPS.
++
++Limitações confirmadas: ShortReplay prepara dados/cursor, não replay espacial operacional; War Room e Shadow já têm reducer/UI legado, mas carecem de produtor real isolado e aceite visual; floors Infra/Inteligência/Command ainda não têm geometrias contínuas aprovadas. Não confundir flags antigas true com conclusão funcional.
+diff --git a/claw3d-next/SHA256SUMS.expansion b/claw3d-next/SHA256SUMS.expansion
+new file mode 100644
+index 0000000..53a560c
+--- /dev/null
++++ b/claw3d-next/SHA256SUMS.expansion
+@@ -0,0 +1,12 @@
++87bacb5103b26973a76fde81dc0be41bc4dfdb7cef92ed1502a359850fe601fc  ThirdFloorDirector.ts
++96af8fee72e72a0561cb8bb9055936e169cff80e9a5c291cf1445c56258ebe96  ThirdFloorRoute.ts
++ac5673978519667da9e97950bba03e92f3585af95b9f0507ab70acf374e7f21b  ThirdFloorStations.ts
++6014884faa02534d065258b728a1a6405ed8989ea296fb11934205e8006c0ea1  MonitorCanvas.ts
++8c3f06a4a0d8175f41f81dbecb7b6d8b8fc28ffddd08a584db470adfd7342759  NpcMonitorTexture.tsx
++f1c30d449a9fc19df58324e2cf65cbe0ad59a9943fe0ce3dc3f8411b48ab47d6  ThirdFloorWorkstations.tsx
++75e237068ae13b87504b3345214506cdc26a566330bf71ceaf12b4df20b8accd  ShortReplay.ts
++af32447135fd69be76649d9284de1e71e49689a43294abdd570b483aa09e0ede  telemetry-bridge.cjs
++aefc3e647f32c112eea77d0ca0f7c01c091e953926c4cc0b9de869c125e50dd4  patch-third-floor.cjs
++ce7f28e69570558ae9ef9798d2dd5a7e62463913cf8375bc9c3b1d0b866ac723  patch-world-provenance.cjs
++e14168f9120c92660308bbd63516b51918727c5d45c69ddc5ca021fd11a8ad0c  dev-qa-telemetry.cjs
++865de06997addbd624e5ee405f4f28f7f717c2e8c0e3f6a97451053fcd07368d  Workflow_n8n_ThirdFloor_Preparation.json
+diff --git a/claw3d-next/ShortReplay.ts b/claw3d-next/ShortReplay.ts
+new file mode 100644
+index 0000000..300539e
+--- /dev/null
++++ b/claw3d-next/ShortReplay.ts
+@@ -0,0 +1,32 @@
++import type {ThirdFloorEvent} from './ThirdFloorDirector';
++export type ObservedPose={agentId:string;runId:string;x:number;y:number;world:[number,number,number];state:string};
++export type ReplayFrame={readonly at:number;readonly poses:readonly Readonly<ObservedPose>[];readonly events:readonly ThirdFloorEvent[]};
++// Preparation contract: monotonic client milliseconds, at most 1 sample/second,
++// at most 180 samples and 180 seconds of RAM. No RPC, persistence or live mutation.
++// A producer must supply actual physical poses; transport events cannot infer them.
++export class ShortReplay {
++ private frames:ReplayFrame[]=[];
++ private selected:ReplayFrame|null=null;
++ capture(at:number,poses:ObservedPose[],events:ThirdFloorEvent[]):boolean {
++  const previous=this.frames.at(-1);
++  if(!Number.isFinite(at)||at<0||(previous&&at-previous.at<1000))return false;
++  if(poses.some(p=>![p.x,p.y,...p.world].every(Number.isFinite)))return false;
++  const safePoses=poses.slice(0,100).map(p=>Object.freeze({
++   agentId:p.agentId,runId:p.runId,x:p.x,y:p.y,
++   world:Object.freeze([...p.world]) as unknown as [number,number,number],state:p.state,
++  }));
++  const safeEvents=events.slice(0,100).map(e=>Object.freeze({
++   id:e.id,source:e.source,floorId:e.floorId,agentId:e.agentId,runId:e.runId,sequence:e.sequence,status:e.status,
++   ...(e.stationId?{stationId:e.stationId}:{}),...(e.progress!==undefined?{progress:e.progress}:{}),
++  }));
++  const frame=Object.freeze({at,poses:Object.freeze(safePoses),events:Object.freeze(safeEvents)});
++  this.frames=this.frames.filter(f=>at-f.at<180000).concat(frame).slice(-180);
++  if(this.selected&&!this.frames.includes(this.selected))this.selected=null;
++  return true;
++ }
++ select(index:number|null):void {
++  this.selected=index===null||!Number.isInteger(index)||index<0||index>=this.frames.length-1?null:this.frames[index];
++ }
++ getView(){return Object.freeze({frames:Object.freeze([...this.frames]),selected:this.selected,live:this.frames.at(-1)??null})}
++ clear(){this.frames=[];this.selected=null}
++}
+diff --git a/claw3d-next/ThirdFloorDirector.ts b/claw3d-next/ThirdFloorDirector.ts
+index 4a2b7f6..fb277d7 100644
+--- a/claw3d-next/ThirdFloorDirector.ts
++++ b/claw3d-next/ThirdFloorDirector.ts
+@@ -4,6 +4,7 @@ export type ThirdFloorEvent = {
+   id: string; source: "n8n"; floorId: "dev-third"; agentId: string;
+   runId: string; sequence: number;
+   status: "workflow.running" | "workflow.completed" | "workflow.failed";
++  stationId?: string; progress?: number; durationMs?: number; recentLogs?: readonly string[];
+ };
+ const listeners = new Set<() => void>();
+ let view: Readonly<Record<string, ThirdFloorEvent>> = Object.freeze({});
+@@ -12,7 +13,8 @@ const runs = new Map<string, ThirdFloorEvent>();
+ const timers = new Map<string, ReturnType<typeof setTimeout>>();
+ const arrivals = new Set<string>();
+ const id = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(value);
+-const statuses = new Set(["workflow.running", "workflow.completed", "workflow.failed"]);
++const statuses = new Set(["workflow.running", "workflow.completed", "workflow.failed", "workflow.log", "workflow.step"]);
++const technicalLogs = new Set(["Validação sintética iniciada", "Etapa sintética validada", "Validação sintética concluída"]);
+ let preview: ThirdFloorEvent | null = null;
+ let previewTimer: ReturnType<typeof setTimeout> | undefined;
+ let snapshot = view;
+@@ -25,18 +27,26 @@ export const thirdFloorDirector = {
+   ingest(raw: unknown): boolean {
+     const frame = raw as { type?: unknown; event?: unknown; payload?: unknown } | null;
+     if (frame?.type !== "event" || frame.event !== "sofia.ops") return false;
+-    const event = frame.payload as ThirdFloorEvent | null;
++    const event = frame.payload as (Omit<ThirdFloorEvent, "status"> & {status: string}) | null;
+     if (!event || event.source !== "n8n" || event.floorId !== "dev-third") return false;
+     if (!statuses.has(event.status) ||
+         !id(event.id) || !id(event.agentId) || !id(event.runId) || !Number.isSafeInteger(event.sequence) || event.sequence < 1) return true;
+     const key = JSON.stringify([event.agentId, event.runId]);
+     const previous = runs.get(key);
++    const update = event.status === "workflow.log" || event.status === "workflow.step";
++    if (update && !previous) return true;
+     if (previous && (event.sequence <= previous.sequence || event.id === previous.id ||
+         previous.status !== "workflow.running")) return true;
+     const active = view[event.agentId];
+     if (active && active.runId !== event.runId && event.status !== "workflow.running") return true;
+     const safe: ThirdFloorEvent = Object.freeze({ id: event.id, source: "n8n", floorId: "dev-third",
+-      agentId: event.agentId, runId: event.runId, sequence: event.sequence, status: event.status });
++      agentId: event.agentId, runId: event.runId, sequence: event.sequence,
++      status: update ? "workflow.running" : event.status as ThirdFloorEvent["status"],
++      ...(previous?.stationId ? {stationId:previous.stationId} : event.stationId && ["qa_station_1","qa_station_2","devops_desk","war_room","shadow_desk"].includes(event.stationId) ? {stationId:event.stationId} : {}),
++      ...(Number.isFinite(event.progress) && event.progress! >= 0 && event.progress! <= 100 ? {progress:Math.round(event.progress!)} : previous?.progress !== undefined ? {progress:previous.progress} : {}),
++      ...(Number.isFinite(event.durationMs) && event.durationMs! >= 0 && event.durationMs! <= 86400000 ? {durationMs:Math.round(event.durationMs!)} : {}),
++      ...(Array.isArray(event.recentLogs) ? {recentLogs:Object.freeze(event.recentLogs.filter(line=>technicalLogs.has(line)).slice(-20))} : previous?.recentLogs ? {recentLogs:previous.recentLogs} : {}),
++    });
+     runs.delete(key); runs.set(key, safe);
+     while (runs.size > 100) { const oldest = runs.keys().next().value!; runs.delete(oldest); arrivals.delete(oldest); }
+     if (Object.keys(view).length >= 100 && !view[safe.agentId]) return true;
+@@ -65,7 +75,7 @@ export const thirdFloorDirector = {
+   },
+   subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+   preview(status: unknown) {
+-    if (status !== null && !statuses.has(status as string)) return false;
++    if (status !== null && !["workflow.running", "workflow.completed", "workflow.failed"].includes(status as string)) return false;
+     clearTimeout(previewTimer);
+     preview = status === null ? null : Object.freeze({ id: "visual-preview", source: "n8n",
+       floorId: "dev-third", agentId: "main", runId: "visual-preview", sequence: 1,
+diff --git a/claw3d-next/ThirdFloorRoute.ts b/claw3d-next/ThirdFloorRoute.ts
+index b90f105..bb71928 100644
+--- a/claw3d-next/ThirdFloorRoute.ts
++++ b/claw3d-next/ThirdFloorRoute.ts
+@@ -42,26 +42,40 @@ const floorGrid = (furniture: FurnitureItem[], minY: number, maxY: number): NavG
+ 
+ export function planThirdFloorRoute(
+   start: { x: number; y: number; sofiaWorldPosition?: WorldPoint },
+-  target: { x: number; y: number },
++  target: { x: number; y: number; floorId?: "dev-third" },
+   groundFurniture: FurnitureItem[],
+   upperFurniture: FurnitureItem[],
++  thirdFurniture: FurnitureItem[] = [],
+ ): TransitPoint[] {
+-  const up = target.x === THIRD_FLOOR_DESTINATION.x && target.y === THIRD_FLOOR_DESTINATION.y;
++  const up = target.floorId === "dev-third" || target.x === THIRD_FLOOR_DESTINATION.x && target.y === THIRD_FLOOR_DESTINATION.y;
++  if (target.floorId === "dev-third" && (target.y < 1710 || target.y > 1740 || target.x < 25 || target.x >= CANVAS_W-25)) return [];
+   const route: TransitPoint[] = [];
+   let current = { ...start };
+   const height = start.sofiaWorldPosition?.[1] ?? 0;
+   const append = (p: TransitPoint) => { route.push(p); current = p; };
+-  const walk = (destination: TransitPoint, grid: NavGrid, floorHeight: number) => {
++  const walk = (destination: TransitPoint, grid: NavGrid, floorHeight: number, ox=0, oz=0) => {
+     const path = astar(current.x, current.y, destination.x, destination.y, grid);
+     if (!path.length) return false;
+-    for (const p of path) append(point(p.x, p.y, floorHeight));
++    for (const p of path) append(point(p.x, p.y, floorHeight,ox,oz));
+     return true;
+   };
+   const ground = floorGrid(groundFurniture, 0, 719);
+   const upper = floorGrid(upperFurniture, 1020, 1740);
++  const third = floorGrid(thirdFurniture, 1700, 1740);
++  const final = point(target.x,target.y,9.6,5.2,-1.4);
++  const walkThird = (destination:TransitPoint) => {
++    const cols=Math.ceil(CANVAS_W/25);
++    // A* snaps blocked targets to a nearby cell, then appends the original
++    // target. Reject occupied endpoints before invoking that legacy behavior.
++    if(third[Math.floor(destination.y/25)*cols+Math.floor(destination.x/25)])return false;
++    return walk(destination,third,9.6,5.2,-1.4);
++  };
+   if (up) {
+-    if (height >= 9.6 - 1e-6) return [SECOND_RAMP_END];
+-    if (height > 4.8 + 1e-6) return [SECOND_RAMP_END];
++    if (height >= 9.6 - 1e-6) return target.floorId ? walkThird(final) ? route : [] : [SECOND_RAMP_END];
++    if (height > 4.8 + 1e-6) {
++      append(SECOND_RAMP_END);
++      return target.floorId ? walkThird(final) ? route : [] : route;
++    }
+     if (height < 4.8 - 1e-6) {
+       if (height <= 1e-6 && current.y < 720) {
+         if (!walk(groundGate, ground, 0)) return [];
+@@ -72,7 +86,11 @@ export function planThirdFloorRoute(
+     }
+     if (!walk(SECOND_RAMP_START, upper, 4.8)) return [];
+     append(SECOND_RAMP_END);
++    if(target.floorId && !walkThird(final))return [];
+   } else {
++    if(height >= 9.6-1e-6 && (current.x!==1390 || current.y!==1710)) {
++      if(!walkThird(SECOND_RAMP_END))return [];
++    }
+     if (height > 4.8 + 1e-6) append(SECOND_RAMP_START);
+     if (height >= 4.8 - 1e-6) {
+       if (!walk(upperGate, upper, 4.8)) return [];
+diff --git a/claw3d-next/ThirdFloorStations.ts b/claw3d-next/ThirdFloorStations.ts
+new file mode 100644
+index 0000000..10f8301
+--- /dev/null
++++ b/claw3d-next/ThirdFloorStations.ts
+@@ -0,0 +1,26 @@
++import {toWorld} from '@/features/retro-office/core/geometry';
++export type StationTarget={stationId:string;x:number;y:number;facing:number;pose:'stand';floorId:'dev-third'};
++// Proposed layout on the existing south corridor. Geometry/Android acceptance
++// remains required; these leases do not move avatars until explicitly wired.
++const positions:[string,number][]=[
++ ['qa_station_1',1390],['qa_station_2',1470],['devops_desk',1310],['war_room',1230],['shadow_desk',1550],
++];
++export const THIRD_FLOOR_STATIONS:Readonly<Record<string,StationTarget>>=Object.freeze(Object.fromEntries(positions.map(([stationId,x])=>[stationId,Object.freeze({stationId,x,y:1710,facing:0,pose:'stand' as const,floorId:'dev-third' as const})])));
++export function stationWorld(x:number,y:number,heightOffset=0):[number,number,number] {
++ const [wx,,wz]=toWorld(x,y);return [wx+5.2,9.6+heightOffset,wz-1.4];
++}
++export class StationAllocator {
++ private leases=new Map<string,{agentId:string;runId:string}>();
++ claim(agentId:string,runId:string,stationId:string):StationTarget|null {
++  const station=THIRD_FLOOR_STATIONS[stationId];if(!station)return null;
++  const occupant=this.leases.get(stationId);
++  if(occupant && (occupant.agentId!==agentId || occupant.runId!==runId))return null;
++  // One station per agent. Reusing an occupied station requires release;
++  // stale terminal events can never release another run's lease.
++  for(const [key,lease] of this.leases)if(lease.agentId===agentId && key!==stationId)this.leases.delete(key);
++  this.leases.set(stationId,{agentId,runId});return station;
++ }
++ release(agentId:string,runId:string) {
++  for(const [key,lease] of this.leases)if(lease.agentId===agentId&&lease.runId===runId)this.leases.delete(key);
++ }
++}
+diff --git a/claw3d-next/ThirdFloorWorkstations.tsx b/claw3d-next/ThirdFloorWorkstations.tsx
+new file mode 100644
+index 0000000..df13c1a
+--- /dev/null
++++ b/claw3d-next/ThirdFloorWorkstations.tsx
+@@ -0,0 +1,14 @@
++"use client";
++import {memo} from 'react';
++import {stationWorld,THIRD_FLOOR_STATIONS} from './ThirdFloorStations';
++import {NpcMonitorScreen} from './NpcMonitorTexture';
++// Single monitor first. The candidate layout is explicit and remains opt-in.
++// Candidate desk is on the top floor, clear of the landing avatar. Multiple
++// desks require a separate collision/layout acceptance before activation.
++export const ThirdFloorWorkstations=memo(function ThirdFloorWorkstations() {
++ const stations=[THIRD_FLOOR_STATIONS.qa_station_1];
++ return <group name="sofia-third-floor-workstations">{stations.map(s=><group key={s.stationId} position={stationWorld(s.x-60,s.y)}>
++   <mesh position={[0,0.75,0]}><boxGeometry args={[0.7,0.08,0.55]}/><meshBasicMaterial color="#cda47b"/></mesh>
++   <group position={[0,1.05,0]}><NpcMonitorScreen stationId={s.stationId}/></group>
++  </group>)}</group>;
++});
+diff --git a/claw3d-next/Workflow_n8n_ThirdFloor_Preparation.json b/claw3d-next/Workflow_n8n_ThirdFloor_Preparation.json
+new file mode 100644
+index 0000000..0663186
+--- /dev/null
++++ b/claw3d-next/Workflow_n8n_ThirdFloor_Preparation.json
+@@ -0,0 +1,380 @@
++{
++  "name": "DEV INATIVO - Sofia Monitor Sintetico - Preparacao",
++  "nodes": [
++    {
++      "parameters": {},
++      "id": "node-trigger",
++      "name": "Iniciar Teste Monitor 3D",
++      "type": "n8n-nodes-base.manualTrigger",
++      "typeVersion": 1,
++      "position": [
++        0,
++        0
++      ]
++    },
++    {
++      "parameters": {
++        "method": "POST",
++        "url": "https://sofia-claw3d-next-production.up.railway.app/api/sofia-ops/events/third-floor",
++        "authentication": "genericCredentialType",
++        "genericAuthType": "httpHeaderAuth",
++        "sendBody": true,
++        "specifyBody": "json",
++        "jsonBody": "={{ {\"id\": \"n8n-\" + $execution.id + \"-1\", \"source\": \"n8n\", \"floorId\": \"dev-third\", \"agentId\": \"main\", \"runId\": \"n8n-\" + $execution.id, \"sequence\": 1, \"status\": \"workflow.running\", \"stationId\": \"qa_station_1\", \"progress\": 0, \"logCode\": \"validation.started\"} }}",
++        "options": {
++          "redirect": {
++            "redirect": {
++              "followRedirects": false
++            }
++          },
++          "response": {
++            "response": {
++              "responseFormat": "json"
++            }
++          },
++          "timeout": 5000
++        },
++        "contentType": "json"
++      },
++      "id": "node-running",
++      "name": "1. Disparar Running",
++      "type": "n8n-nodes-base.httpRequest",
++      "typeVersion": 4.5,
++      "position": [
++        220,
++        0
++      ]
++    },
++    {
++      "parameters": {
++        "amount": 4,
++        "unit": "seconds"
++      },
++      "id": "node-wait-1",
++      "name": "Aguardar 4s",
++      "type": "n8n-nodes-base.wait",
++      "typeVersion": 1.1,
++      "position": [
++        440,
++        0
++      ]
++    },
++    {
++      "parameters": {
++        "method": "POST",
++        "url": "https://sofia-claw3d-next-production.up.railway.app/api/sofia-ops/events/third-floor",
++        "authentication": "genericCredentialType",
++        "genericAuthType": "httpHeaderAuth",
++        "sendBody": true,
++        "specifyBody": "json",
++        "jsonBody": "={{ {\"id\": \"n8n-\" + $execution.id + \"-2\", \"source\": \"n8n\", \"floorId\": \"dev-third\", \"agentId\": \"main\", \"runId\": \"n8n-\" + $execution.id, \"sequence\": 2, \"status\": \"workflow.log\", \"stationId\": \"qa_station_1\", \"progress\": 45, \"logCode\": \"validation.step\"} }}",
++        "options": {
++          "redirect": {
++            "redirect": {
++              "followRedirects": false
++            }
++          },
++          "response": {
++            "response": {
++              "responseFormat": "json"
++            }
++          },
++          "timeout": 5000
++        },
++        "contentType": "json"
++      },
++      "id": "node-log-1",
++      "name": "2. Log Intermediário 1",
++      "type": "n8n-nodes-base.httpRequest",
++      "typeVersion": 4.5,
++      "position": [
++        660,
++        0
++      ]
++    },
++    {
++      "parameters": {
++        "amount": 4,
++        "unit": "seconds"
++      },
++      "id": "node-wait-2",
++      "name": "Aguardar 4s ",
++      "type": "n8n-nodes-base.wait",
++      "typeVersion": 1.1,
++      "position": [
++        880,
++        0
++      ]
++    },
++    {
++      "parameters": {
++        "method": "POST",
++        "url": "https://sofia-claw3d-next-production.up.railway.app/api/sofia-ops/events/third-floor",
++        "authentication": "genericCredentialType",
++        "genericAuthType": "httpHeaderAuth",
++        "sendBody": true,
++        "specifyBody": "json",
++        "jsonBody": "={{ {\"id\": \"n8n-\" + $execution.id + \"-3\", \"source\": \"n8n\", \"floorId\": \"dev-third\", \"agentId\": \"main\", \"runId\": \"n8n-\" + $execution.id, \"sequence\": 3, \"status\": \"workflow.step\", \"stationId\": \"qa_station_1\", \"progress\": 80, \"logCode\": \"validation.step\"} }}",
++        "options": {
++          "redirect": {
++            "redirect": {
++              "followRedirects": false
++            }
++          },
++          "response": {
++            "response": {
++              "responseFormat": "json"
++            }
++          },
++          "timeout": 5000
++        },
++        "contentType": "json"
++      },
++      "id": "node-log-2",
++      "name": "3. Log Intermediário 2",
++      "type": "n8n-nodes-base.httpRequest",
++      "typeVersion": 4.5,
++      "position": [
++        1100,
++        0
++      ]
++    },
++    {
++      "parameters": {
++        "amount": 3,
++        "unit": "seconds"
++      },
++      "id": "node-wait-3",
++      "name": "Aguardar 3s",
++      "type": "n8n-nodes-base.wait",
++      "typeVersion": 1.1,
++      "position": [
++        1320,
++        0
++      ]
++    },
++    {
++      "parameters": {
++        "method": "POST",
++        "url": "https://sofia-claw3d-next-production.up.railway.app/api/sofia-ops/events/third-floor",
++        "authentication": "genericCredentialType",
++        "genericAuthType": "httpHeaderAuth",
++        "sendBody": true,
++        "specifyBody": "json",
++        "jsonBody": "={{ {\"id\": \"n8n-\" + $execution.id + \"-4\", \"source\": \"n8n\", \"floorId\": \"dev-third\", \"agentId\": \"main\", \"runId\": \"n8n-\" + $execution.id, \"sequence\": 4, \"status\": \"workflow.completed\", \"stationId\": \"qa_station_1\", \"progress\": 100, \"logCode\": \"validation.completed\"} }}",
++        "options": {
++          "redirect": {
++            "redirect": {
++              "followRedirects": false
++            }
++          },
++          "response": {
++            "response": {
++              "responseFormat": "json"
++            }
++          },
++          "timeout": 5000
++        },
++        "contentType": "json"
++      },
++      "id": "node-completed",
++      "name": "4. Disparar Completed",
++      "type": "n8n-nodes-base.httpRequest",
++      "typeVersion": 4.5,
++      "position": [
++        1540,
++        0
++      ]
++    },
++    {
++      "id": "accepted-1",
++      "name": "Validar aceite 1",
++      "type": "n8n-nodes-base.code",
++      "typeVersion": 2,
++      "position": [
++        340,
++        0
++      ],
++      "parameters": {
++        "mode": "runOnceForAllItems",
++        "jsCode": "for (const item of $input.all()) { if (item.json.accepted !== true) throw new Error('Telemetry not accepted'); } return $input.all();"
++      }
++    },
++    {
++      "id": "accepted-2",
++      "name": "Validar aceite 2",
++      "type": "n8n-nodes-base.code",
++      "typeVersion": 2,
++      "position": [
++        780,
++        0
++      ],
++      "parameters": {
++        "mode": "runOnceForAllItems",
++        "jsCode": "for (const item of $input.all()) { if (item.json.accepted !== true) throw new Error('Telemetry not accepted'); } return $input.all();"
++      }
++    },
++    {
++      "id": "accepted-3",
++      "name": "Validar aceite 3",
++      "type": "n8n-nodes-base.code",
++      "typeVersion": 2,
++      "position": [
++        1220,
++        0
++      ],
++      "parameters": {
++        "mode": "runOnceForAllItems",
++        "jsCode": "for (const item of $input.all()) { if (item.json.accepted !== true) throw new Error('Telemetry not accepted'); } return $input.all();"
++      }
++    },
++    {
++      "id": "accepted-4",
++      "name": "Validar aceite 4",
++      "type": "n8n-nodes-base.code",
++      "typeVersion": 2,
++      "position": [
++        1660,
++        0
++      ],
++      "parameters": {
++        "mode": "runOnceForAllItems",
++        "jsCode": "for (const item of $input.all()) { if (item.json.accepted !== true) throw new Error('Telemetry not accepted'); } return $input.all();"
++      }
++    }
++  ],
++  "connections": {
++    "Iniciar Teste Monitor 3D": {
++      "main": [
++        [
++          {
++            "node": "1. Disparar Running",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "1. Disparar Running": {
++      "main": [
++        [
++          {
++            "node": "Validar aceite 1",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "Aguardar 4s": {
++      "main": [
++        [
++          {
++            "node": "2. Log Intermediário 1",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "2. Log Intermediário 1": {
++      "main": [
++        [
++          {
++            "node": "Validar aceite 2",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "Aguardar 4s ": {
++      "main": [
++        [
++          {
++            "node": "3. Log Intermediário 2",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "3. Log Intermediário 2": {
++      "main": [
++        [
++          {
++            "node": "Validar aceite 3",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "Aguardar 3s": {
++      "main": [
++        [
++          {
++            "node": "4. Disparar Completed",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "Validar aceite 1": {
++      "main": [
++        [
++          {
++            "node": "Aguardar 4s",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "Validar aceite 2": {
++      "main": [
++        [
++          {
++            "node": "Aguardar 4s ",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "Validar aceite 3": {
++      "main": [
++        [
++          {
++            "node": "Aguardar 3s",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "4. Disparar Completed": {
++      "main": [
++        [
++          {
++            "node": "Validar aceite 4",
++            "type": "main",
++            "index": 0
++          }
++        ]
++      ]
++    },
++    "Validar aceite 4": {
++      "main": [
++        []
++      ]
++    }
++  },
++  "settings": {
++    "executionOrder": "v1",
++    "executionTimeout": 90,
++    "saveManualExecutions": false
++  },
++  "active": false
++}
+diff --git a/claw3d-next/dev-qa-telemetry.cjs b/claw3d-next/dev-qa-telemetry.cjs
+new file mode 100644
+index 0000000..91745a3
+--- /dev/null
++++ b/claw3d-next/dev-qa-telemetry.cjs
+@@ -0,0 +1,15 @@
++'use strict';
++// Caller obtains these facts from trusted execution metadata, not request text.
++// This pure adapter never fetches or sends. Runtime wiring remains separate.
++function makeQaTelemetry(proof){
++ if(!proof||proof.workflowId!=='ao8OMQEpoaGbORGE'||proof.manual!==true||proof.inactive!==true||
++    proof.externalCalls!==0||proof.realMessages!==0||typeof proof.qaPassed!=='boolean'||
++    typeof proof.executionId!=='string'||!/^\d{1,20}$/.test(proof.executionId))throw Error('Isolated DEV proof required');
++ const runId='qa-'+proof.executionId;
++ const base={source:'n8n',floorId:'dev-third',agentId:'main',runId,stationId:'qa_station_1'};
++ return [
++  Object.freeze({...base,id:runId+'-1',sequence:1,status:'workflow.running',progress:0}),
++  Object.freeze({...base,id:runId+'-2',sequence:2,status:proof.qaPassed?'workflow.completed':'workflow.failed',progress:100}),
++ ];
++}
++module.exports={makeQaTelemetry};
+diff --git a/claw3d-next/patch-third-floor.cjs b/claw3d-next/patch-third-floor.cjs
+new file mode 100644
+index 0000000..9d0f745
+--- /dev/null
++++ b/claw3d-next/patch-third-floor.cjs
+@@ -0,0 +1,24 @@
++'use strict';
++const fs=require('node:fs'),path=require('node:path');
++if(process.env.SOFIA_THIRD_FLOOR_EXPANSION!=='1'){console.log('SOFIA_THIRD_FLOOR_EXPANSION: disabled');process.exit(0)}
++const marker='SOFIA_THIRD_FLOOR_EXPANSION';
++const sceneFile='src/features/retro-office/RetroOffice3D.tsx';
++const files=['ThirdFloorDirector.ts','ThirdFloorRoute.ts','ThirdFloorStations.ts','MonitorCanvas.ts','NpcMonitorTexture.tsx','ThirdFloorWorkstations.tsx','ShortReplay.ts'];
++let scene=fs.readFileSync(sceneFile,'utf8');
++if(!scene.includes('synchronizeThirdFloorRoute')||!scene.includes('thirdFloorDirector.arrived('))throw Error(marker+': verified Phase 2 route/arrival baseline missing');
++// Resolve all anchors and sources before writing anything. This installer
++// assumes the verified Phase 2 baseline is already present; it changes no auth.
++for(const file of files)fs.accessSync(path.join(__dirname,file),fs.constants.R_OK);
++if(!scene.includes('// '+marker)){
++ const change=(anchor,replacement)=>{
++  if(scene.split(anchor).length!==2)throw Error(marker+': missing/ambiguous anchor');
++  scene=scene.replace(anchor,replacement);
++ };
++ change('"use client";','"use client";\n// '+marker+'\nimport {ThirdFloorWorkstations} from "@/features/sofia-ops/ThirdFloorWorkstations";');
++ const anchor='{/* Game loop — no React state, pure ref mutations. */}';
++ change(anchor,'{sofiaCampusMode && <ThirdFloorWorkstations />}\n            '+anchor);
++}
++const destination='src/features/sofia-ops';fs.mkdirSync(destination,{recursive:true});
++for(const file of files)fs.copyFileSync(path.join(__dirname,file),path.join(destination,file));
++fs.writeFileSync(sceneFile,scene);
++console.log(marker+': canonical files installed, single candidate monitor; multi-target routing not activated');
+diff --git a/claw3d-next/patch-world-provenance.cjs b/claw3d-next/patch-world-provenance.cjs
+new file mode 100644
+index 0000000..0c16c32
+--- /dev/null
++++ b/claw3d-next/patch-world-provenance.cjs
+@@ -0,0 +1,22 @@
++'use strict';
++const fs=require('node:fs');
++if(process.env.SOFIA_WORLD_PROVENANCE!=='1'){console.log('SOFIA_WORLD_PROVENANCE: disabled');process.exit(0)}
++const file='src/lib/sofia-ops/worldState.ts';
++let text=fs.readFileSync(file,'utf8');
++if(text.includes('// SOFIA_WORLD_PROVENANCE')){console.log('SOFIA_WORLD_PROVENANCE: already installed');process.exit(0)}
++function change(anchor,replacement){if(text.split(anchor).length!==2)throw Error('SOFIA_WORLD_PROVENANCE: anchor mismatch');text=text.replace(anchor,replacement)}
++change('    if (opened.correlationId && recovery.correlationId) return recovery.correlationId === opened.correlationId;',`    // SOFIA_WORLD_PROVENANCE: no cross-project fallback from shared source.
++    if (opened.project && recovery.project && slugProject(opened.project) !== slugProject(recovery.project)) return false;
++    if (opened.correlationId) return recovery.correlationId === opened.correlationId;`);
++change(`        (event.id === incidentEvent!.id ||
++          (incidentEvent!.correlationId && event.correlationId === incidentEvent!.correlationId) ||
++          event.source === incidentEvent!.source ||
++          classified.get(event.id)!.critical ||
++          classified.get(event.id)!.kind === "recovery"),`, `        (event.id === incidentEvent!.id ||
++          (Boolean(event.synthetic) === Boolean(incidentEvent!.synthetic) &&
++            slugProject(event.project) === slugProject(incidentEvent!.project) &&
++            (incidentEvent!.correlationId ? event.correlationId === incidentEvent!.correlationId : event.source === incidentEvent!.source))),`);
++change('      if (correlation && event.correlationId && event.correlationId !== correlation) continue;',`      if ((event.correlationId ?? null) !== correlation || Boolean(event.synthetic) !== Boolean(latestShadow.synthetic) || slugProject(event.project) !== slugProject(latestShadow.project)) continue;
++      if (!correlation && event.id !== latestShadow.id) continue;`);
++fs.writeFileSync(file,text);
++console.log('SOFIA_WORLD_PROVENANCE: causal incident evidence and correlated Shadow pairs installed');
+diff --git a/claw3d-next/telemetry-bridge.cjs b/claw3d-next/telemetry-bridge.cjs
+index 47ecb35..fdd6740 100644
+--- a/claw3d-next/telemetry-bridge.cjs
++++ b/claw3d-next/telemetry-bridge.cjs
+@@ -6,6 +6,10 @@ const MAX_RUNS = 100;
+ const MAX_BUFFERED = 128 * 1024;
+ const TTL_MS = 5 * 60 * 1000;
+ const STATUS = new Set(['workflow.running', 'workflow.completed', 'workflow.failed']);
++const EXTRA_STATUS = new Set(['workflow.log', 'workflow.step']);
++// Catalogued technical messages only. Truncating text does not anonymize PHI.
++const LOGS = Object.freeze({ 'validation.started': 'Validação sintética iniciada', 'validation.step': 'Etapa sintética validada', 'validation.completed': 'Validação sintética concluída' });
++const terminal = status => status === 'workflow.completed' || status === 'workflow.failed';
+ const clients = new Set();
+ const runs = new Map();
+ let rateStart = 0;
+@@ -14,12 +18,20 @@ const enabled = () => process.env.SOFIA_THIRD_FLOOR_TELEMETRY === '1';
+ const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,120}$/.test(value);
+ const normalize = body => {
+   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+-  if (body.source !== 'n8n' || body.floorId !== 'dev-third' || !STATUS.has(body.status)) return null;
++  const expansion = process.env.SOFIA_THIRD_FLOOR_EXPANSION === '1';
++  if (body.source !== 'n8n' || body.floorId !== 'dev-third' || !(STATUS.has(body.status) || expansion && EXTRA_STATUS.has(body.status))) return null;
+   if (![body.id, body.agentId, body.runId].every(identifier)) return null;
+   if (!Number.isSafeInteger(body.sequence) || body.sequence < 1) return null;
+   // Explicit allowlist: never retain free-form payloads, summaries or patient data.
+-  return { id: body.id, source: 'n8n', floorId: 'dev-third', agentId: body.agentId,
++  const event = { id: body.id, source: 'n8n', floorId: 'dev-third', agentId: body.agentId,
+     runId: body.runId, sequence: body.sequence, status: body.status };
++  if (expansion) {
++    if (['qa_station_1','qa_station_2','devops_desk','war_room','shadow_desk'].includes(body.stationId)) event.stationId = body.stationId;
++    if (Object.hasOwn(LOGS, body.logCode)) event.logCode = body.logCode;
++    if (Number.isFinite(body.progress) && body.progress >= 0 && body.progress <= 100) event.progress = Math.round(body.progress);
++    if (Number.isFinite(body.durationMs) && body.durationMs >= 0 && body.durationMs <= 86400000) event.durationMs = Math.round(body.durationMs);
++  }
++  return event;
+ };
+ const prune = () => {
+   const now = Date.now();
+@@ -38,13 +50,21 @@ const publish = event => {
+   const previous = runs.get(key);
+   if (previous && (event.sequence <= previous.event.sequence || event.id === previous.event.id)) return false;
+   // Terminal is immutable, including completed -> failed and failed -> completed.
+-  if (previous && previous.event.status !== 'workflow.running') return false;
++  if (previous && terminal(previous.event.status)) return false;
++  if (!previous && EXTRA_STATUS.has(event.status)) return false;
+   const active = [...runs.values()].reverse().find(value => value.event.agentId === event.agentId);
+   if (active && active.event.runId !== event.runId && event.status !== 'workflow.running') return false;
++  const logs = previous?.event.recentLogs ?? [];
++  const safe = process.env.SOFIA_THIRD_FLOOR_EXPANSION === '1' ? {
++    ...event,
++    ...(event.stationId || previous?.event.stationId ? {stationId:previous?.event.stationId ?? event.stationId} : {}),
++    ...(event.progress !== undefined || previous?.event.progress !== undefined ? {progress:event.progress ?? previous.event.progress} : {}),
++    recentLogs: event.logCode ? [...logs, LOGS[event.logCode]].slice(-20) : logs,
++  } : event;
+   runs.delete(key);
+-  runs.set(key, { event, receivedAt: Date.now() });
++  runs.set(key, { event: safe, receivedAt: Date.now() });
+   while (runs.size > MAX_RUNS) runs.delete(runs.keys().next().value);
+-  for (const socket of clients) transmit(socket, event);
++  for (const socket of clients) transmit(socket, safe);
+   return true;
+ };
+ const authenticate = (socket, hello) => {
+diff --git a/claw3d-next/tests/dev-qa-telemetry.test.cjs b/claw3d-next/tests/dev-qa-telemetry.test.cjs
+new file mode 100644
+index 0000000..7152d9a
+--- /dev/null
++++ b/claw3d-next/tests/dev-qa-telemetry.test.cjs
+@@ -0,0 +1,25 @@
++'use strict';
++const assert=require('node:assert/strict');
++const {makeQaTelemetry}=require('../dev-qa-telemetry.cjs');
++const proof={workflowId:'ao8OMQEpoaGbORGE',executionId:'7796',manual:true,inactive:true,externalCalls:0,realMessages:0,qaPassed:true};
++const frames=makeQaTelemetry(proof);
++assert.deepEqual(frames.map(e=>e.status),['workflow.running','workflow.completed']);
++assert.equal(frames[0].runId,'qa-7796');assert.equal(frames[1].sequence,2);
++assert.equal(JSON.stringify(frames).includes('patient'),false);
++assert.equal(makeQaTelemetry({...proof,qaPassed:false})[1].status,'workflow.failed');
++for(const override of [{externalCalls:1},{realMessages:1},{inactive:false},{manual:false},{workflowId:'other'},{executionId:'unsafe space'},{qaPassed:undefined}]) {
++ assert.throws(()=>makeQaTelemetry({...proof,...override}));
++}
++const {EventEmitter}=require('node:events');
++process.env.SOFIA_THIRD_FLOOR_TELEMETRY='1';process.env.SOFIA_OPS_EVENT_TOKEN='synthetic-only';
++const bridge=require('../telemetry-bridge.cjs');const sent=[];const client=new EventEmitter();
++Object.assign(client,{readyState:1,bufferedAmount:0,send(raw){sent.push(JSON.parse(raw).payload)}});
++bridge.authenticate(client,{type:'hello-ok',auth:{role:'operator',scopes:['operator.read']}});
++for(const event of frames){
++ const request=new EventEmitter();Object.assign(request,{method:'POST',url:'/api/sofia-ops/events/third-floor',headers:{authorization:'Bearer synthetic-only','content-type':'application/json'},resume(){}});
++ const response={writeHead(code){this.code=code},end(raw){this.body=JSON.parse(raw)}};
++ bridge.handleIngress(request,response);request.emit('data',Buffer.from(JSON.stringify(event)));request.emit('end');
++ assert.equal(response.code,202);assert.equal(response.body.accepted,true);
++}
++assert.equal(sent.length,2);assert.equal(sent[1].runId,'qa-7796');
++console.log('PASS DEV adapter: isolated source guards, technical allowlist, phase pair, semantic acceptance and authenticated local broadcast');
+diff --git a/claw3d-next/tests/expansion-installer.test.cjs b/claw3d-next/tests/expansion-installer.test.cjs
+new file mode 100644
+index 0000000..855931a
+--- /dev/null
++++ b/claw3d-next/tests/expansion-installer.test.cjs
+@@ -0,0 +1,17 @@
++'use strict';
++const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),cp=require('node:child_process'),assert=require('node:assert/strict');
++const root=path.resolve(__dirname,'..');const app=fs.mkdtempSync(path.join(os.tmpdir(),'sofia-install-'));
++const scene=path.join(app,'src/features/retro-office/RetroOffice3D.tsx');
++fs.mkdirSync(path.dirname(scene),{recursive:true});fs.writeFileSync(scene,'"use client";\n// synchronizeThirdFloorRoute and thirdFloorDirector.arrived( exist in baseline\nconst scene=()=><>{/* Game loop — no React state, pure ref mutations. */}</>;');
++const run=env=>cp.spawnSync(process.execPath,[path.join(root,'patch-third-floor.cjs')],{cwd:app,env:{...process.env,...env},encoding:'utf8'});
++const original=fs.readFileSync(scene,'utf8');
++assert.equal(run({SOFIA_THIRD_FLOOR_EXPANSION:'0'}).status,0);assert.equal(fs.readFileSync(scene,'utf8'),original);
++fs.writeFileSync(scene,'anchor intentionally absent');assert.notEqual(run({SOFIA_THIRD_FLOOR_EXPANSION:'1'}).status,0);
++assert.equal(fs.readFileSync(scene,'utf8'),'anchor intentionally absent');assert.equal(fs.existsSync(path.join(app,'src/features/sofia-ops/MonitorCanvas.ts')),false);
++fs.writeFileSync(scene,original);assert.equal(run({SOFIA_THIRD_FLOOR_EXPANSION:'1'}).status,0);
++const installed=fs.readFileSync(scene,'utf8');assert.ok(installed.includes('<ThirdFloorWorkstations />'));
++assert.ok(installed.includes('sofiaCampusMode'));assert.equal(run({SOFIA_THIRD_FLOOR_EXPANSION:'1'}).status,0);assert.equal(fs.readFileSync(scene,'utf8'),installed);
++assert.equal(fs.readFileSync(path.join(app,'src/features/sofia-ops/ThirdFloorDirector.ts'),'utf8'),fs.readFileSync(path.join(root,'ThirdFloorDirector.ts'),'utf8'));
++assert.equal(fs.existsSync(path.join(app,'src/features/sofia-ops/ThirdFloorDirector-v2.ts')),false);
++fs.rmSync(app,{recursive:true,force:true});
++console.log('PASS installer: opt-in, anchor preflight before mutation, canonical copies, campus gate, idempotence');
+diff --git a/claw3d-next/tests/telemetry-expansion.test.cjs b/claw3d-next/tests/telemetry-expansion.test.cjs
+new file mode 100644
+index 0000000..8a58ed8
+--- /dev/null
++++ b/claw3d-next/tests/telemetry-expansion.test.cjs
+@@ -0,0 +1,34 @@
++'use strict';
++const assert = require('node:assert/strict');
++const { EventEmitter } = require('node:events');
++process.env.SOFIA_THIRD_FLOOR_TELEMETRY = '1';
++process.env.SOFIA_OPS_EVENT_TOKEN = 'synthetic-test-only';
++const bridge = require('../telemetry-bridge.cjs');
++const frames=[]; const socket=new EventEmitter();
++Object.assign(socket,{readyState:1,bufferedAmount:0,send(raw){frames.push(JSON.parse(raw).payload);}});
++bridge.authenticate(socket,{type:'hello-ok',auth:{role:'operator',scopes:['operator.read']}});
++function post(runId, sequence, status, extra={}) {
++ const req=new EventEmitter(); Object.assign(req,{method:'POST',url:'/api/sofia-ops/events/third-floor',headers:{authorization:'Bearer synthetic-test-only','content-type':'application/json'},resume(){}});
++ const res={writeHead(code){this.code=code},end(raw){this.body=JSON.parse(raw)}};
++ bridge.handleIngress(req,res);req.emit('data',Buffer.from(JSON.stringify({id:runId+'-'+sequence,source:'n8n',floorId:'dev-third',agentId:'main',runId,sequence,status,...extra})));req.emit('end');return res;
++}
++// Expansion is opt-in; baseline never starts accepting new kinds accidentally.
++assert.equal(post('off',1,'workflow.log').code,422);
++process.env.SOFIA_THIRD_FLOOR_EXPANSION='1';
++assert.equal(post('orphan',1,'workflow.log').body.accepted,false);
++assert.equal(post('a',1,'workflow.running',{stationId:'qa_station_1'}).body.accepted,true);
++assert.equal(post('a',2,'workflow.log',{logCode:'validation.started',progress:45,patient:'private',log:'private free text'}).body.accepted,true);
++assert.equal(frames.at(-1).status,'workflow.log');
++assert.equal(frames.at(-1).recentLogs[0],'Validação sintética iniciada');
++assert.equal(frames.at(-1).patient,undefined);assert.equal(frames.at(-1).log,undefined);
++assert.equal(post('a',3,'workflow.step',{progress:80,stationId:'qa_station_2'}).body.accepted,true);
++assert.equal(frames.at(-1).stationId,'qa_station_1');
++assert.equal(post('a',4,'workflow.completed',{durationMs:1234}).body.accepted,true);
++for(const status of ['workflow.running','workflow.log','workflow.step','workflow.failed','workflow.completed']) assert.equal(post('a',10,status).body.accepted,false);
++assert.equal(post('b',1,'workflow.running').body.accepted,true);
++assert.equal(post('a',11,'workflow.failed').body.accepted,false);
++assert.equal(post('old',2,'workflow.step').body.accepted,false);
++const replay=[];const client=new EventEmitter();Object.assign(client,{readyState:1,bufferedAmount:0,send(raw){replay.push(JSON.parse(raw).payload)}});
++bridge.authenticate(client,{type:'hello-ok',auth:{role:'operator',scopes:['operator.read']}});
++assert.equal(replay.length,1);assert.equal(replay[0].runId,'b');
++console.log('PASS expansion: opt-in, orphan/old rejection, bounded technical metadata, immutable terminal, latest replay');
+diff --git a/claw3d-next/tests/third-floor-director.test.cjs b/claw3d-next/tests/third-floor-director.test.cjs
+index 763dba0..ae13708 100644
+--- a/claw3d-next/tests/third-floor-director.test.cjs
++++ b/claw3d-next/tests/third-floor-director.test.cjs
+@@ -17,7 +17,7 @@ const director = context.module.exports.thirdFloorDirector;
+ const event = { id: 'run-1-start', source: 'n8n', floorId: 'dev-third', agentId: 'n8n-reviewer', runId: 'run-1', sequence: 1, status: 'workflow.running' };
+ const frame = event => ({ type: 'event', event: 'sofia.ops', payload: event });
+ assert.equal(director.ingest({ type: 'event', event: 'agent', payload: {} }), false);
+-assert.equal(director.ingest(frame({ ...event, floorId: 'audit-second' })), true);
++assert.equal(director.ingest(frame({ ...event, floorId: 'audit-second' })), false);
+ assert.equal(Object.keys(director.getSnapshot()).length, 0);
+ let notified = 0;
+ const unsubscribe = director.subscribe(() => ++notified);
+diff --git a/claw3d-next/tests/unit/sofia.contractAudit.test.ts b/claw3d-next/tests/unit/sofia.contractAudit.test.ts
+new file mode 100644
+index 0000000..cc35255
+--- /dev/null
++++ b/claw3d-next/tests/unit/sofia.contractAudit.test.ts
+@@ -0,0 +1,69 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { reduceWorld, STATE_LABEL } from "@/lib/sofia-ops/worldState";
++import { readFileSync } from "node:fs";
++import { runInNewContext } from "node:vm";
++
++afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.resetModules(); });
++const event = (status: string, sequence: number, runId = "audit-run") => ({
++  type: "event", event: "sofia.ops", payload: {
++    id: `${runId}-${sequence}`, source: "n8n", floorId: "dev-third",
++    agentId: "main", runId, sequence, status,
++  },
++});
++
++describe("contract audit: separate workflow and OpenClaw states", () => {
++  it("releases the arrived completed workflow after 30s while the independent OpenClaw label stays working", async () => {
++    vi.useFakeTimers(); vi.resetModules(); vi.setSystemTime(1800000000000);
++    const { thirdFloorDirector: d } = await import("@/features/sofia-ops/ThirdFloorDirector");
++    d.ingest(event("workflow.running", 1));
++    d.ingest(event("workflow.completed", 2));
++    vi.advanceTimersByTime(45000);
++    expect(d.getSnapshot().main.status).toBe("workflow.completed");
++    const agents = [{ id: "main", status: "running" }];
++    expect(STATE_LABEL[reduceWorld([], agents, Date.now()).agents.main.state]).toBe("trabalhando");
++    d.arrived("main"); vi.advanceTimersByTime(29999);
++    expect(d.getSnapshot().main.status).toBe("workflow.completed");
++    vi.advanceTimersByTime(1);
++    expect(d.getSnapshot().main).toBeUndefined();
++    expect(STATE_LABEL[reduceWorld([], agents, Date.now()).agents.main.state]).toBe("trabalhando");
++  });
++
++  it("preserves a real run over preview and rejects late terminal/log/step/running updates", async () => {
++    vi.useFakeTimers(); vi.resetModules();
++    const { thirdFloorDirector: d } = await import("@/features/sofia-ops/ThirdFloorDirector");
++    d.preview("workflow.failed"); d.ingest(event("workflow.running", 1));
++    expect(d.getSnapshot().main.runId).toBe("audit-run");
++    d.ingest(event("workflow.completed", 2));
++    for (const [index, status] of ["workflow.log", "workflow.step", "workflow.running", "workflow.failed"].entries()) d.ingest(event(status, 3 + index));
++    expect(d.getSnapshot().main.status).toBe("workflow.completed");
++    d.ingest(event("workflow.running", 1, "new-run"));
++    d.ingest(event("workflow.failed", 99));
++    expect(d.getSnapshot().main.runId).toBe("new-run");
++    d.preview(null);
++    expect(d.getSnapshot().main.runId).toBe("new-run");
++    const other = event("workflow.running", 1, "other-floor"); other.payload.floorId = "audit-second";
++    expect(d.ingest(other)).toBe(false);
++  });
++
++  it("accepts the near-exact terminal height after the actual R4 rounding and refuses a still-walking frame", () => {
++    vi.useFakeTimers(); document.body.innerHTML = "";
++    const w = window as any; delete w.__sofiaAccessCheckInstalled;
++    const nativeSocket = window.WebSocket;
++    const canvas = document.createElement("canvas");
++    const raw = { revision: "R3", x: 1390, y: 1710, world: [14.02, 9.599999999999998, 13.18],
++      target: [1390, 1710], route: true, state: "walking", path: 0, blocked: false, phase: "workflow.completed" };
++    canvas.dataset.sofiaMain = JSON.stringify(raw); document.body.append(canvas);
++    const send = vi.fn(() => Promise.resolve({}));
++    try {
++      runInNewContext(readFileSync("tests/fixtures/sofia-access-check-client.js", "utf8"),
++        { window, document, fetch: send, URL, Date, Map, Set, JSON, Math, Number, String });
++      window.dispatchEvent(new Event("load")); vi.advanceTimersByTime(1000);
++      expect(document.body.textContent).not.toContain("Chegada confirmada");
++      canvas.dataset.sofiaMain = JSON.stringify({ ...raw, state: "standing" });
++      vi.advanceTimersByTime(1000);
++      expect(document.body.textContent).toContain("Chegada confirmada");
++      const reports = send.mock.calls.map(call => JSON.parse(JSON.parse((call as any)[1].body).message));
++      expect(reports.at(-1)).toMatchObject({ milestone: "arrived", world: [14.02, 9.6, 13.18] });
++    } finally { window.WebSocket = nativeSocket; delete w.__sofiaAccessCheckInstalled; document.body.innerHTML = ""; }
++  });
++});
+diff --git a/claw3d-next/tests/unit/sofia.expansion.test.ts b/claw3d-next/tests/unit/sofia.expansion.test.ts
+new file mode 100644
+index 0000000..a9fcc13
+--- /dev/null
++++ b/claw3d-next/tests/unit/sofia.expansion.test.ts
+@@ -0,0 +1,30 @@
++import { describe,it,expect,vi,afterEach } from 'vitest';
++import { thirdFloorDirector } from '@/features/sofia-ops/ThirdFloorDirector';
++const frame=(runId:string,sequence:number,status:string,extra={})=>({type:'event',event:'sofia.ops',payload:{id:`${runId}-${sequence}`,source:'n8n',floorId:'dev-third',agentId:'main',runId,sequence,status,...extra}});
++afterEach(()=>{vi.runAllTimers();vi.useRealTimers()});
++describe('expansion phase/data separation',()=>{
++ it('keeps the station assigned at running immutable for the same run',()=>{
++  vi.useFakeTimers();thirdFloorDirector.ingest(frame('fixed-station',1,'workflow.running',{stationId:'qa_station_1'}));
++  thirdFloorDirector.ingest(frame('fixed-station',2,'workflow.step',{stationId:'qa_station_2'}));
++  expect(thirdFloorDirector.getSnapshot().main.stationId).toBe('qa_station_1');
++ });
++ it('log/step preserve running phase and terminal before arrival keeps control',()=>{
++  vi.useFakeTimers();thirdFloorDirector.ingest(frame('expand',1,'workflow.running'));
++  thirdFloorDirector.ingest(frame('expand',2,'workflow.log',{recentLogs:['Validação sintética iniciada'],progress:45}));
++  expect(thirdFloorDirector.getSnapshot().main).toMatchObject({status:'workflow.running',sequence:2,progress:45,recentLogs:['Validação sintética iniciada']});
++  thirdFloorDirector.ingest(frame('expand',3,'workflow.step',{progress:80}));
++  thirdFloorDirector.ingest(frame('expand',4,'workflow.completed'));
++  vi.advanceTimersByTime(40000);expect(thirdFloorDirector.getSnapshot().main.status).toBe('workflow.completed');
++  thirdFloorDirector.arrived('main');vi.advanceTimersByTime(29999);expect(thirdFloorDirector.getSnapshot().main).toBeDefined();
++  vi.advanceTimersByTime(1);expect(thirdFloorDirector.getSnapshot().main).toBeUndefined();
++ });
++ it('rejects orphan logs and terminal mutation; raw fields never enter monitor',()=>{
++  vi.useFakeTimers();thirdFloorDirector.ingest(frame('orphan-exp',1,'workflow.log'));
++  expect(thirdFloorDirector.getSnapshot().main).toBeUndefined();
++  thirdFloorDirector.ingest(frame('terminal-exp',1,'workflow.running'));
++  thirdFloorDirector.ingest(frame('terminal-exp',2,'workflow.failed'));
++  const terminal=thirdFloorDirector.getSnapshot().main;
++  for(const status of ['workflow.running','workflow.log','workflow.step','workflow.completed','workflow.failed']) thirdFloorDirector.ingest(frame('terminal-exp',9,status,{patient:'drop',log:'drop'}));
++  expect(thirdFloorDirector.getSnapshot().main).toBe(terminal);
++ });
++});
+diff --git a/claw3d-next/tests/unit/sofia.monitor.test.ts b/claw3d-next/tests/unit/sofia.monitor.test.ts
+new file mode 100644
+index 0000000..e256844
+--- /dev/null
++++ b/claw3d-next/tests/unit/sofia.monitor.test.ts
+@@ -0,0 +1,31 @@
++// @vitest-environment node
++import {describe,it,expect,vi,afterEach} from 'vitest';
++import {createRequire} from 'node:module';
++import {createMonitorCanvas} from '@/features/sofia-ops/MonitorCanvas';
++import type {ThirdFloorEvent} from '@/features/sofia-ops/ThirdFloorDirector';
++const require=createRequire(import.meta.url);
++const {createCanvas}=require(process.env.SOFIA_CANVAS_TEST_MODULE ?? '@napi-rs/canvas');
++const event=(status:ThirdFloorEvent['status']):ThirdFloorEvent=>({id:'e',agentId:'main',runId:'synthetic',sequence:1,source:'n8n',floorId:'dev-third',status,progress:100,recentLogs:['Validação sintética iniciada']});
++afterEach(()=>vi.useRealTimers());
++describe('monitor resources and actual painted pixels',()=>{
++ it('paints exact workflow colours and standby/terminal create no repeating timers',()=>{
++  vi.useFakeTimers();const canvas=createCanvas(512,256);const m=createMonitorCanvas(canvas,()=>{});
++  for(const [status,rgb] of [['workflow.running',[56,189,248]],['workflow.completed',[74,222,128]],['workflow.failed',[251,113,133]]] as const){
++   m.update(event(status));vi.advanceTimersByTime(500);
++   expect([...canvas.getContext('2d').getImageData(40,49,1,1).data].slice(0,3)).toEqual(rgb);
++  }
++  m.update(null);vi.advanceTimersByTime(500);expect(vi.getTimerCount()).toBe(0);
++  expect(canvas.width).toBe(512);expect(canvas.height).toBe(256);
++  m.dispose();expect(vi.getTimerCount()).toBe(0);
++ });
++ it('coalesces updates at 2Hz, latest data survives throttle and disposal stops timers',()=>{
++  vi.useFakeTimers();const canvas=createCanvas(512,256);const m=createMonitorCanvas(canvas,()=>{});
++  m.update(event('workflow.running')); const version=m.texture!.version;
++  m.update({...event('workflow.running'),sequence:2});m.update({...event('workflow.completed'),sequence:3});
++  expect(m.texture!.version).toBe(version);vi.advanceTimersByTime(500);
++  expect(m.texture!.version).toBe(version+1);expect(vi.getTimerCount()).toBe(0);
++  expect([...canvas.getContext('2d').getImageData(40,49,1,1).data].slice(0,3)).toEqual([74,222,128]);
++  m.update(event('workflow.running'));m.dispose();vi.advanceTimersByTime(1000);
++  expect(vi.getTimerCount()).toBe(0);
++ });
++});
+diff --git a/claw3d-next/tests/unit/sofia.provenance.test.ts b/claw3d-next/tests/unit/sofia.provenance.test.ts
+new file mode 100644
+index 0000000..09ed465
+--- /dev/null
++++ b/claw3d-next/tests/unit/sofia.provenance.test.ts
+@@ -0,0 +1,17 @@
++import {describe,it,expect} from 'vitest';
++import {reduceWorld,type WorldEvent} from '@/lib/sofia-ops/worldState';
++const ts=1800000000000;
++const e=(id:string,type:string,extra:Partial<WorldEvent>={}):WorldEvent=>({id,type,ts,source:'railway',severity:'info',summary:id,project:'sofia',...extra});
++describe('causal evidence isolation',()=>{
++ it('War Room excludes another correlation/project recovery and critical evidence',()=>{
++  const events=[e('incident-a','incident.opened',{correlationId:'a',severity:'critical'}),e('other','incident.resolved',{ts:ts+1,source:'n8n',project:'other',correlationId:'b',severity:'success'}),e('other-critical','workflow.failed',{ts:ts+2,source:'n8n',project:'other',correlationId:'b',severity:'critical'})];
++  const world=reduceWorld(events,[{id:'main',status:'idle'}],ts+100);
++  expect(world.incident?.timeline.map(x=>x.id)).toEqual(['incident-a']);
++  expect(world.incident?.evidence).toEqual(['incident-a']);
++ });
++ it('a correlated Shadow comparison cannot borrow an uncorrelated human/candidate',()=>{
++  const events=[e('candidate','shadow.candidate'),e('human','shadow.human',{ts:ts+1}),e('compare','shadow.compare',{ts:ts+2,correlationId:'specific',payloadText:'{"score":0.9,"match":true}'})];
++  const shadow=reduceWorld(events,[],ts+100).shadow;
++  expect(shadow.compare?.id).toBe('compare');expect(shadow.candidate).toBeNull();expect(shadow.human).toBeNull();
++ });
++});
+diff --git a/claw3d-next/tests/unit/sofia.shortReplay.test.ts b/claw3d-next/tests/unit/sofia.shortReplay.test.ts
+new file mode 100644
+index 0000000..646fc8b
+--- /dev/null
++++ b/claw3d-next/tests/unit/sofia.shortReplay.test.ts
+@@ -0,0 +1,25 @@
++import {describe,it,expect} from 'vitest';
++import {ShortReplay} from '@/features/sofia-ops/ShortReplay';
++describe('bounded spatial observation replay',()=>{
++ it('keeps selected past immutable while live captures continue; returning live has no commands',()=>{
++  const replay=new ShortReplay();
++  const poses=[{agentId:'main',runId:'qa-1',x:1390,y:1710,world:[14.02,9.6,13.18] as [number,number,number],state:'standing'}];
++  replay.capture(1000,poses,[]);replay.capture(2000,[{...poses[0],x:1400}],[]);
++  replay.select(0);const selected=replay.getView().selected;
++  poses[0].world[0]=999;replay.capture(3000,[{...poses[0],x:1500}],[]);
++  expect(replay.getView().selected).toBe(selected);expect(selected?.poses[0].world[0]).toBe(14.02);
++  expect(replay.getView().live?.poses[0].x).toBe(1500);
++  replay.select(null);expect(replay.getView().selected).toBeNull();
++ });
++ it('bounds age/count/rate and rejects invalid or backwards-clock captures',()=>{
++  const replay=new ShortReplay();
++  for(let n=0;n<300;n++)replay.capture(n*1000,[],[]);
++  expect(replay.getView().frames).toHaveLength(180);
++  const before=replay.getView().live;expect(replay.capture(299500,[],[])).toBe(false);
++  expect(replay.capture(2000,[],[])).toBe(false);expect(replay.getView().live).toBe(before);
++  replay.select(0);replay.capture(600000,[],[]);
++  expect(replay.getView().frames).toHaveLength(1);expect(replay.getView().selected).toBeNull();
++  expect(replay.capture(NaN,[],[])).toBe(false);
++  expect(replay.capture(601000,[{agentId:'main',runId:'a',x:0,y:0,world:[0,Infinity,0],state:'standing'}],[])).toBe(false);
++ });
++});
+diff --git a/claw3d-next/tests/unit/sofia.stations.test.ts b/claw3d-next/tests/unit/sofia.stations.test.ts
+new file mode 100644
+index 0000000..6dff0d5
+--- /dev/null
++++ b/claw3d-next/tests/unit/sofia.stations.test.ts
+@@ -0,0 +1,26 @@
++import {describe,it,expect} from 'vitest';
++import {planThirdFloorRoute,SECOND_RAMP_END,FIRST_RAMP_END} from '@/features/sofia-ops/ThirdFloorRoute';
++import {StationAllocator,stationWorld} from '@/features/sofia-ops/ThirdFloorStations';
++describe('explicit third-floor destinations',()=>{
++ it('extra station ascends both ramps and walks on floor 3; returns via landing',()=>{
++  const route=planThirdFloorRoute({x:800,y:420},{x:1470,y:1710,floorId:'dev-third'},[],[],[]);
++  expect(route).toContainEqual(FIRST_RAMP_END);expect(route).toContainEqual(SECOND_RAMP_END);
++  expect(route.at(-1)).toMatchObject({x:1470,y:1710,sofiaWorld:[expect.closeTo(15.46,6),9.6,expect.closeTo(13.18,6)]});
++  const back=planThirdFloorRoute({x:1470,y:1710,sofiaWorldPosition:[15.46,9.6,13.18]},{x:800,y:420},[],[],[]);
++  expect(back).toContainEqual(SECOND_RAMP_END);
++  expect(back.findIndex(p=>p.y===1710&&p.x===1390)).toBeLessThan(back.findIndex(p=>p.y===1480));
++ });
++ it('rejects a station in the ramp or blocked by furniture instead of teleporting',()=>{
++  expect(planThirdFloorRoute({x:800,y:420},{x:1470,y:1640,floorId:'dev-third'},[],[],[])).toEqual([]);
++  expect(planThirdFloorRoute({x:800,y:420},{x:1470,y:1710,floorId:'dev-third'},[],[],[{_uid:'blocked',type:'wall',x:1460,y:1700,w:50,h:50}])).toEqual([]);
++ });
++ it('leases distinct stations, refuses occupancy, releases only matching run',()=>{
++  const pool=new StationAllocator();
++  expect(pool.claim('main','a','qa_station_1')?.stationId).toBe('qa_station_1');
++  expect(pool.claim('n8n-reviewer','b','qa_station_1')).toBeNull();
++  expect(pool.claim('n8n-reviewer','b','qa_station_2')?.x).toBe(1470);
++  pool.release('main','old');expect(pool.claim('supervisor','c','qa_station_1')).toBeNull();
++  pool.release('main','a');expect(pool.claim('supervisor','c','qa_station_1')?.stationId).toBe('qa_station_1');
++  expect(stationWorld(1390,1710)).toEqual([expect.closeTo(14.02,6),9.6,expect.closeTo(13.18,6)]);
++ });
++});
